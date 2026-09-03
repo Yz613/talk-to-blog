@@ -1,0 +1,6 @@
+{
+  "name": "Voice to Medium Article Creator",
+  "description": "Speak your ideas freely and transform them into publication-ready Medium articles with automated SEO optimization and smart tag suggestions.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
