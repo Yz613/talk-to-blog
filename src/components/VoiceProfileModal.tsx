@@ -772,6 +772,23 @@ export default function VoiceProfileModal({
               <p className="text-xs text-white/60 leading-relaxed">{existingProfile.writingInstructions}</p>
             </div>
 
+            {existingProfile.adaptationNotes && existingProfile.adaptationNotes.length > 0 && (
+              <div className="p-4 rounded-xl bg-indigo-950/25 border border-indigo-500/25 mt-3">
+                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-indigo-400 font-bold mb-2">
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                  Learned from your story edits
+                </div>
+                <ul className="space-y-1.5">
+                  {existingProfile.adaptationNotes.slice(-3).map((note, index) => (
+                    <li key={index} className="text-xs text-white/70 flex items-start gap-2 leading-relaxed">
+                      <span className="text-indigo-400 mt-0.5">•</span>
+                      <span>{note}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             <p className="text-[11px] text-white/30 mt-4">Applied automatically to every new Gemini article and refinement. Updated {new Date(existingProfile.updatedAt).toLocaleDateString()}.</p>
             <div className="flex flex-wrap items-center justify-between gap-3 mt-7 pt-5 border-t border-white/5">
               <div className="flex flex-wrap gap-2">

@@ -2,8 +2,17 @@ import express, { type Request } from "express";
 import path from "path";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
-import { generateArticleLocally, refineArticleLocally } from "./src/server/localArticle";
-import type { ArticleLength, ArticleTone } from "./src/types";
+import {
+  generateArticleLocally,
+  refineArticleLocally,
+  adaptVoiceLocally,
+} from "./src/server/localArticle";
+import type {
+  ArticleDraftSnapshot,
+  ArticleLength,
+  ArticleTone,
+  VoiceProfile,
+} from "./src/types";
 
 dotenv.config();
 
@@ -579,6 +588,144 @@ Return updated content strictly as JSON.`;
     res.status(500).json({
       error: error?.message || "Failed to refine article.",
     });
+  }
+});
+
+// Adapt / tune voice profile based on manual author edits
+app.post("/api/adapt-voice-from-edits", async (req, res) => {
+  try {
+    const { original, edited, currentProfile, transcript } = req.body;
+    if (!original || !edited) {
+      return res.status(400).json({ error: "Missing original or edited article draft." });
+    }
+
+    const safeOriginal: ArticleDraftSnapshot = {
+      title: String(original.title || "").slice(0, 300),
+      subtitle: String(original.subtitle || "").slice(0, 500),
+      contentMarkdown: String(original.contentMarkdown || "").slice(0, 50_000),
+    };
+
+    const safeEdited: ArticleDraftSnapshot = {
+      title: String(edited.title || "").slice(0, 300),
+      subtitle: String(edited.subtitle || "").slice(0, 500),
+      contentMarkdown: String(edited.contentMarkdown || "").slice(0, 50_000),
+    };
+
+    // If local mode or Gemini key not available, adapt locally
+    if (!getApiKey(req)) {
+      return res.json(adaptVoiceLocally(safeOriginal, safeEdited, currentProfile));
+    }
+
+    const ai = getGenAI(req);
+
+    const prompt = `You are a master writing voice coach and literary analyst.
+The author was given an AI-generated draft of an article and made manual revisions to it.
+Compare the original AI draft with the author's edited version to deduce the author's authentic voice, stylistic instincts, tone preferences, and rhetorical habits.
+
+ORIGINAL AI DRAFT:
+Title: ${safeOriginal.title}
+Subtitle: ${safeOriginal.subtitle}
+Content:
+${safeOriginal.contentMarkdown}
+
+AUTHOR'S EDITED VERSION:
+Title: ${safeEdited.title}
+Subtitle: ${safeEdited.subtitle}
+Content:
+${safeEdited.contentMarkdown}
+
+${transcript ? `ORIGINAL SPOKEN TRANSCRIPT (for context):\n${String(transcript).slice(0, 5_000)}\n` : ""}
+${currentProfile ? `CURRENT VOICE PROFILE:\n${JSON.stringify(currentProfile, null, 2)}\n` : ""}
+
+YOUR TASK:
+Analyze the differences between the original AI text and the author's edited version:
+1. Vocabulary & phrasing: What specific words, colloquialisms, idioms, or technical nuances did the author introduce?
+2. Avoidances & deletions: What words, phrases, corporate clichés, filler, or fluff did the author strip out or rewrite?
+3. Sentence cadence & pacing: Did the author make sentences shorter and punchier? Or longer and more narrative/conversational? Describe the rhythm.
+4. Tone & attitude: What is the author's true stance (e.g. blunt, witty, skeptical, pragmatic, warm, understated)?
+5. Structure & formatting: Did the author use bullet points, short paragraphs, bold callouts, subheadings?
+6. Actionable writing directives: Create clear, actionable rules for writing in this exact voice in the future.
+
+Synthesize these findings into an updated Voice Profile. If a current voice profile exists, refine and enrich it. If no profile exists, create a complete new profile.
+Provide a concise adaptationSummary (1-2 sentences) describing what changed in the voice profile based on these edits.
+Return valid JSON matching the schema.`;
+
+    const response = await ai.models.generateContent({
+      model: TEXT_MODEL,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            profile: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING, description: "Name of the voice profile" },
+                summary: { type: Type.STRING, description: "Two-sentence summary of the voice" },
+                traits: { type: Type.ARRAY, items: { type: Type.STRING } },
+                sentenceStyle: { type: Type.STRING, description: "Sentence cadence and rhythm" },
+                vocabulary: { type: Type.ARRAY, items: { type: Type.STRING } },
+                signatureMoves: { type: Type.ARRAY, items: { type: Type.STRING } },
+                avoidances: { type: Type.ARRAY, items: { type: Type.STRING } },
+                writingInstructions: { type: Type.STRING, description: "Comprehensive directives for writing articles in this voice" },
+              },
+              required: [
+                "name",
+                "summary",
+                "traits",
+                "sentenceStyle",
+                "vocabulary",
+                "signatureMoves",
+                "avoidances",
+                "writingInstructions",
+              ],
+            },
+            adaptationSummary: {
+              type: Type.STRING,
+              description: "A 1-2 sentence summary of how the voice adjusted to the author's edits",
+            },
+          },
+          required: ["profile", "adaptationSummary"],
+        },
+      },
+    });
+
+    const parsed = JSON.parse(response.text || "{}");
+    const adaptationSummary = parsed.adaptationSummary || "Updated voice profile from your story edits.";
+    const profile = parsed.profile || {};
+
+    const adaptationNotes = [
+      ...(currentProfile?.adaptationNotes || []),
+      `${new Date().toLocaleDateString()}: ${adaptationSummary}`,
+    ].slice(-10);
+
+    const fullProfile: VoiceProfile = {
+      name: profile.name || currentProfile?.name || "My Voice",
+      summary: profile.summary || currentProfile?.summary || "Learned voice profile.",
+      traits: Array.isArray(profile.traits) ? profile.traits : (currentProfile?.traits || []),
+      sentenceStyle: profile.sentenceStyle || currentProfile?.sentenceStyle || "",
+      vocabulary: Array.isArray(profile.vocabulary) ? profile.vocabulary : (currentProfile?.vocabulary || []),
+      signatureMoves: Array.isArray(profile.signatureMoves) ? profile.signatureMoves : (currentProfile?.signatureMoves || []),
+      avoidances: Array.isArray(profile.avoidances) ? profile.avoidances : (currentProfile?.avoidances || []),
+      writingInstructions: profile.writingInstructions || currentProfile?.writingInstructions || "",
+      interviewAnswers: currentProfile?.interviewAnswers || [],
+      updatedAt: new Date().toISOString(),
+      adaptationNotes,
+    };
+
+    res.json({
+      profile: fullProfile,
+      adaptationSummary,
+    });
+  } catch (error: any) {
+    console.error("Voice adaptation error:", error);
+    try {
+      const fallback = adaptVoiceLocally(req.body.original, req.body.edited, req.body.currentProfile);
+      return res.json(fallback);
+    } catch {
+      res.status(500).json({ error: error?.message || "Failed to adjust voice from edits." });
+    }
   }
 });
 

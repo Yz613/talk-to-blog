@@ -27,6 +27,12 @@ export interface ArticleTags {
   alternativeTags: string[];
 }
 
+export interface ArticleDraftSnapshot {
+  title: string;
+  subtitle: string;
+  contentMarkdown: string;
+}
+
 export interface MediumArticle {
   id: string;
   title: string;
@@ -43,6 +49,8 @@ export interface MediumArticle {
   sourceTranscript: string;
   tone: string;
   generationMode?: 'ai' | 'local';
+  initialAiDraft?: ArticleDraftSnapshot;
+  lastVoiceSyncAt?: string;
 }
 
 export type ArticleTone =
@@ -77,4 +85,6 @@ export interface VoiceProfile {
   writingInstructions: string;
   interviewAnswers: VoiceInterviewAnswer[];
   updatedAt: string;
+  adaptationNotes?: string[];
 }
+

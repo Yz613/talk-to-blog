@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Mic,
   FileText,
@@ -63,6 +63,7 @@ export default function App() {
   const [currentArticle, setCurrentArticle] = useState<MediumArticle | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
+  const [isSyncingVoice, setIsSyncingVoice] = useState(false);
   const [drafts, setDrafts] = useState<MediumArticle[]>([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'voice' | 'article' | 'seo'>('voice');
@@ -72,6 +73,7 @@ export default function App() {
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [storySession, setStorySession] = useState(0);
   const [isVoiceProfileOpen, setIsVoiceProfileOpen] = useState(false);
+  const syncVoiceDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [apiKey, setApiKey] = useState(() => {
     try {
       return sessionStorage.getItem(SESSION_API_KEY) || localStorage.getItem(PERSISTENT_API_KEY) || '';
@@ -88,6 +90,14 @@ export default function App() {
       return null;
     }
   });
+
+  useEffect(() => {
+    return () => {
+      if (syncVoiceDebounceRef.current) {
+        clearTimeout(syncVoiceDebounceRef.current);
+      }
+    };
+  }, []);
 
   const selectArticle = (article: MediumArticle | null) => {
     setCurrentArticle(article);
@@ -229,6 +239,12 @@ export default function App() {
 
       const generatedData = await response.json() as GeneratedArticleResponse;
 
+      const initialDraft = {
+        title: generatedData.title,
+        subtitle: generatedData.subtitle,
+        contentMarkdown: generatedData.contentMarkdown,
+      };
+
       const newArticle: MediumArticle = {
         id: `story_${Date.now()}`,
         title: generatedData.title,
@@ -245,6 +261,7 @@ export default function App() {
         sourceTranscript: transcript,
         tone: options.tone,
         generationMode: generatedData.generationMode || 'ai',
+        initialAiDraft: initialDraft,
       };
 
       selectArticle(newArticle);
@@ -263,6 +280,67 @@ export default function App() {
       showStatus(`Could not generate the article: ${error.message || 'Unknown error'}`, true, 7000);
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  // Sync author manual edits to their Voice Profile
+  const handleSyncVoiceFromEdits = async (overrideArticle?: MediumArticle) => {
+    const targetArticle = overrideArticle || currentArticle;
+    if (!targetArticle) return;
+
+    const baseline = targetArticle.initialAiDraft;
+    if (!baseline) return;
+
+    const hasChanges =
+      targetArticle.title.trim() !== baseline.title.trim() ||
+      targetArticle.subtitle.trim() !== baseline.subtitle.trim() ||
+      targetArticle.contentMarkdown.trim() !== baseline.contentMarkdown.trim();
+
+    if (!hasChanges) return;
+
+    setIsSyncingVoice(true);
+    try {
+      const response = await fetch('/api/adapt-voice-from-edits', {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({
+          original: baseline,
+          edited: {
+            title: targetArticle.title,
+            subtitle: targetArticle.subtitle,
+            contentMarkdown: targetArticle.contentMarkdown,
+          },
+          currentProfile: voiceProfile,
+          transcript: rawTranscript || targetArticle.sourceTranscript,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(err.error || 'Failed to adapt voice from edits.');
+      }
+
+      const data = await response.json() as { profile: VoiceProfile; adaptationSummary?: string };
+      if (data.profile) {
+        handleSaveVoiceProfile(data.profile);
+        const syncedArticle: MediumArticle = {
+          ...targetArticle,
+          lastVoiceSyncAt: new Date().toISOString(),
+          initialAiDraft: {
+            title: targetArticle.title,
+            subtitle: targetArticle.subtitle,
+            contentMarkdown: targetArticle.contentMarkdown,
+          },
+        };
+        selectArticle(syncedArticle);
+        const updatedList = drafts.map((d) => (d.id === syncedArticle.id ? syncedArticle : d));
+        saveDraftsToStorage(updatedList);
+        showStatus(data.adaptationSummary ? `Voice tuned: ${data.adaptationSummary}` : 'Voice adjusted from your latest edits!');
+      }
+    } catch (err: any) {
+      console.warn('Could not adapt voice from edits:', err);
+    } finally {
+      setIsSyncingVoice(false);
     }
   };
 
@@ -289,16 +367,23 @@ export default function App() {
 
       const refined = await response.json() as RefinedArticleResponse;
 
-      const updatedArticle: MediumArticle = {
-        ...currentArticle,
+      const refinedSnapshot = {
         title: refined.title || currentArticle.title,
         subtitle: refined.subtitle || currentArticle.subtitle,
         contentMarkdown: refined.contentMarkdown || currentArticle.contentMarkdown,
+      };
+
+      const updatedArticle: MediumArticle = {
+        ...currentArticle,
+        title: refinedSnapshot.title,
+        subtitle: refinedSnapshot.subtitle,
+        contentMarkdown: refinedSnapshot.contentMarkdown,
         seo: {
           ...currentArticle.seo,
           seoScore: refined.updatedSeoScore || currentArticle.seo.seoScore,
         },
         generationMode: refined.generationMode || currentArticle.generationMode,
+        initialAiDraft: refinedSnapshot,
       };
 
       selectArticle(updatedArticle);
@@ -318,15 +403,30 @@ export default function App() {
   const handleUpdateArticle = (updatedFields: Partial<MediumArticle>) => {
     if (!currentArticle) return;
     const contentMarkdown = updatedFields.contentMarkdown ?? currentArticle.contentMarkdown;
-    const updated = {
+    const baseline = currentArticle.initialAiDraft || {
+      title: currentArticle.title,
+      subtitle: currentArticle.subtitle,
+      contentMarkdown: currentArticle.contentMarkdown,
+    };
+
+    const updated: MediumArticle = {
       ...currentArticle,
       ...updatedFields,
+      initialAiDraft: baseline,
       wordCount: contentMarkdown.trim() ? contentMarkdown.trim().split(/\s+/).length : 0,
       readTimeMinutes: Math.max(1, Math.ceil((contentMarkdown.trim().split(/\s+/).filter(Boolean).length) / 220)),
     };
     selectArticle(updated);
     const updatedList = drafts.map((d) => (d.id === updated.id ? updated : d));
     saveDraftsToStorage(updatedList);
+
+    // Debounce background voice adaptation (3.5s after user stops editing)
+    if (syncVoiceDebounceRef.current) {
+      clearTimeout(syncVoiceDebounceRef.current);
+    }
+    syncVoiceDebounceRef.current = setTimeout(() => {
+      void handleSyncVoiceFromEdits(updated);
+    }, 3500);
   };
 
   // Update SEO fields
@@ -591,9 +691,12 @@ export default function App() {
           <div className="space-y-6">
             <MediumPreview
               article={currentArticle}
+              voiceProfile={voiceProfile}
               onUpdateArticle={handleUpdateArticle}
               onRefineSection={handleRefine}
+              onSyncVoiceFromEdits={() => handleSyncVoiceFromEdits()}
               isRefining={isRefining}
+              isSyncingVoice={isSyncingVoice}
             />
           </div>
         )}

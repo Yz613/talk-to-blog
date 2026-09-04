@@ -1,4 +1,10 @@
-import type { ArticleLength, ArticleTone, MediumArticle } from '../types';
+import type {
+  ArticleDraftSnapshot,
+  ArticleLength,
+  ArticleTone,
+  MediumArticle,
+  VoiceProfile,
+} from '../types';
 
 export interface GeneratedArticle
   extends Omit<MediumArticle, 'id' | 'createdAt' | 'sourceTranscript' | 'tone'> {
@@ -242,3 +248,132 @@ export function refineArticleLocally(
     generationMode: 'local' as const,
   };
 }
+
+export interface AdaptedVoiceResult {
+  profile: VoiceProfile;
+  adaptationSummary: string;
+}
+
+export function adaptVoiceLocally(
+  original: ArticleDraftSnapshot,
+  edited: ArticleDraftSnapshot,
+  currentProfile?: VoiceProfile | null,
+): AdaptedVoiceResult {
+  const origText = `${original.title} ${original.subtitle} ${original.contentMarkdown}`;
+  const editText = `${edited.title} ${edited.subtitle} ${edited.contentMarkdown}`;
+
+  const origSentences = sentencesFrom(origText);
+  const editSentences = sentencesFrom(editText);
+
+  const origAvgLength = origSentences.length
+    ? countWords(origText) / origSentences.length
+    : 15;
+  const editAvgLength = editSentences.length
+    ? countWords(editText) / editSentences.length
+    : 15;
+
+  const getWordSet = (text: string) => {
+    return new Set(
+      text
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length > 2 && !STOP_WORDS.has(w))
+    );
+  };
+
+  const origWords = getWordSet(origText);
+  const editWords = getWordSet(editText);
+
+  const addedWords = Array.from(editWords).filter((w) => !origWords.has(w) && w.length > 3);
+  const removedWords = Array.from(origWords).filter((w) => !editWords.has(w) && w.length > 3);
+
+  let sentenceStyle = currentProfile?.sentenceStyle || 'Balanced and conversational flow.';
+  const traits = new Set(currentProfile?.traits || ['Direct', 'Conversational']);
+  const signatureMoves = new Set(currentProfile?.signatureMoves || []);
+  const avoidances = new Set(currentProfile?.avoidances || []);
+  const vocabulary = new Set(currentProfile?.vocabulary || []);
+
+  const summaries: string[] = [];
+
+  if (editAvgLength < origAvgLength * 0.85) {
+    sentenceStyle = 'Punchy, concise cadence with short, impactful sentences and minimal fluff.';
+    traits.add('Punchy');
+    traits.add('Concise');
+    traits.add('Direct');
+    summaries.push('Tuned for shorter, punchier sentences');
+  } else if (editAvgLength > origAvgLength * 1.15) {
+    sentenceStyle = 'Nuanced, flowing cadence that develops ideas with thorough context and storytelling.';
+    traits.add('Nuanced');
+    traits.add('Story-driven');
+    summaries.push('Tuned for flowing, narrative rhythm');
+  }
+
+  if (addedWords.length > 0) {
+    const newVocab = addedWords.slice(0, 5);
+    newVocab.forEach((w) => vocabulary.add(w));
+    summaries.push(`Adopted signature phrasing: "${newVocab.slice(0, 3).join(', ')}"`);
+  }
+
+  const AI_CLICHES = new Set([
+    'delve', 'testament', 'tapestry', 'game-changer', 'revolutionize',
+    'pivotal', 'landscape', 'realm', 'beacon', 'unleash', 'leverage',
+    'moreover', 'furthermore', 'crucial', 'foster', 'underscore',
+  ]);
+  const removedCliches = removedWords.filter((w) => AI_CLICHES.has(w));
+  if (removedCliches.length > 0) {
+    removedCliches.forEach((w) => avoidances.add(`Words like "${w}"`));
+    summaries.push(`Avoids corporate clichés like "${removedCliches.join(', ')}"`);
+  } else if (removedWords.length > 3) {
+    avoidances.add(`Unnecessary padding or filler around "${removedWords.slice(0, 2).join(', ')}"`);
+    summaries.push(`Pruned filler and tightened phrasing`);
+  }
+
+  const origH2Count = (original.contentMarkdown.match(/^##\s/gm) || []).length;
+  const editH2Count = (edited.contentMarkdown.match(/^##\s/gm) || []).length;
+  if (editH2Count > origH2Count) {
+    signatureMoves.add('Frequent subheadings to chunk ideas into digestible sections');
+  }
+
+  const origBullets = (original.contentMarkdown.match(/^\s*[-*]\s/gm) || []).length;
+  const editBullets = (edited.contentMarkdown.match(/^\s*[-*]\s/gm) || []).length;
+  if (editBullets > origBullets) {
+    signatureMoves.add('Actionable bulleted blueprints and skimmable lists');
+    summaries.push('Prefers bulleted takeaways');
+  }
+
+  const summary = summaries.length > 0
+    ? `Adjusted voice: ${summaries.join('; ')}.`
+    : 'Adjusted voice: refined tone and stylistic choices from your manual edits.';
+
+  const baseInstructions = currentProfile?.writingInstructions
+    ? currentProfile.writingInstructions.replace(/\s*\[Adjusted from edits:.*$/, '')
+    : 'Write with natural authority and clarity, preserving the author\'s unique perspective.';
+
+  const newInstructions = `${baseInstructions.trim()} [Adjusted from edits: ${sentenceStyle} Incorporate vocabulary: ${Array.from(vocabulary).slice(-6).join(', ')}. Avoid: ${Array.from(avoidances).slice(-5).join(', ')}.]`;
+
+  const updatedNotes = [
+    ...(currentProfile?.adaptationNotes || []),
+    `${new Date().toLocaleDateString()}: ${summary}`,
+  ].slice(-10);
+
+  const updatedProfile: VoiceProfile = {
+    name: currentProfile?.name || 'My Voice (Tuned from Edits)',
+    summary: currentProfile?.summary || 'A custom voice profile tuned directly from your manual story edits.',
+    traits: Array.from(traits).slice(0, 10),
+    sentenceStyle,
+    vocabulary: Array.from(vocabulary).slice(0, 20),
+    signatureMoves: Array.from(signatureMoves).slice(0, 8),
+    avoidances: Array.from(avoidances).slice(0, 8),
+    writingInstructions: newInstructions,
+    interviewAnswers: currentProfile?.interviewAnswers || [],
+    updatedAt: new Date().toISOString(),
+    adaptationNotes: updatedNotes,
+  };
+
+  return {
+    profile: updatedProfile,
+    adaptationSummary: summary,
+  };
+}
+

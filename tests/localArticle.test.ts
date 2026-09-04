@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { generateArticleLocally, refineArticleLocally } from '../src/server/localArticle';
+import {
+  generateArticleLocally,
+  refineArticleLocally,
+  adaptVoiceLocally,
+} from '../src/server/localArticle';
 
 const transcript = 'We underpriced our first product because we feared rejection. The low price attracted demanding customers who did not value the work. When we raised the price, churn dropped and better customers took us seriously.';
 
@@ -41,3 +45,36 @@ test('punchiness refinement preserves Markdown structure', () => {
 
   assert.ok(refined.contentMarkdown.includes('\n\n## '));
 });
+
+test('voice adapts from user edits: shortens cadence and prunes clichés', () => {
+  const original = {
+    title: 'How to Delve into Pricing and Leverage Strategic Synergies',
+    subtitle: 'A comprehensive game-changer exploration of product pricing in the modern landscape.',
+    contentMarkdown: 'In today’s fast-paced world, it is crucial that organizations delve into pricing strategies. We must leverage every advantage to empower our teams. This will revolutionize the market testament.',
+  };
+
+  const edited = {
+    title: 'Stop Underpricing Your Work',
+    subtitle: 'Charge what it is worth. Your best customers will thank you.',
+    contentMarkdown: 'Charge more. Most founders underprice out of fear. When you raise prices, demanding clients leave and great clients stay.\n\n- Know your floor\n- Double the price\n- Watch churn vanish',
+  };
+
+  const result = adaptVoiceLocally(original, edited, null);
+
+  assert.ok(result.profile);
+  assert.ok(result.adaptationSummary.length > 0);
+  // Should detect punchy / short cadence
+  assert.ok(result.profile.traits.includes('Punchy') || result.profile.traits.includes('Concise'));
+  assert.match(result.profile.sentenceStyle, /punchy|concise/i);
+  // Should detect removed cliches
+  assert.ok(
+    result.profile.avoidances.some((a) => /delve|game-changer|leverage/i.test(a)) ||
+    result.adaptationSummary.includes('Avoids') ||
+    result.adaptationSummary.includes('Pruned'),
+  );
+  // Should detect added vocabulary
+  assert.ok(result.profile.vocabulary.length > 0);
+  // Should include adaptation notes
+  assert.ok(result.profile.adaptationNotes && result.profile.adaptationNotes.length > 0);
+});
+
