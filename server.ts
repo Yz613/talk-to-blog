@@ -91,29 +91,37 @@ app.post("/api/test-key", async (req, res) => {
 app.post("/api/analyze-voice", async (req, res) => {
   try {
     const answers = req.body?.answers;
-    if (!Array.isArray(answers) || answers.length < 3) {
-      return res.status(400).json({ error: "Complete at least three voice interview answers." });
+    if (!Array.isArray(answers) || answers.length < 2) {
+      return res.status(400).json({ error: "Answer at least two voice questions to build your profile." });
     }
     if (!getApiKey(req)) {
       return res.status(401).json({ error: "Connect Gemini before building a voice profile." });
     }
 
-    const safeAnswers = answers.slice(0, 10).map((item: any) => ({
+    const safeAnswers = answers.slice(0, 25).map((item: any) => ({
       question: String(item?.question || "").slice(0, 300),
       answer: String(item?.answer || "").slice(0, 4_000),
-    })).filter((item: { answer: string }) => item.answer.trim().length >= 20);
+    })).filter((item: { answer: string }) => item.answer.trim().length >= 3);
 
-    if (safeAnswers.length < 3) {
-      return res.status(400).json({ error: "Give a little more detail in at least three answers." });
+    if (safeAnswers.length < 2) {
+      return res.status(400).json({ error: "Answer at least two questions or select options so Gemini can learn your voice." });
     }
 
     const response = await getGenAI(req).models.generateContent({
       model: TEXT_MODEL,
-      contents: `You are a meticulous writing-style analyst. Build a reusable voice profile from the author's interview answers below.
+      contents: `You are an expert writing coach and ghostwriter. Build a reusable voice profile from the author's survey responses below.
 
-Infer HOW this person communicates—not their opinions as universal facts. Capture cadence, directness, humor, emotional register, favorite rhetorical moves, vocabulary level, paragraph rhythm, and what would sound unlike them. The final writingInstructions must be specific enough for another writer to imitate the voice while preserving factual accuracy. Never infer sensitive personal attributes.
+The author answered questions that may include selected multiple-choice stylistic preferences, short single-sentence hot takes, advice, and open-ended voice samples.
+Synthesize these inputs to infer HOW this person communicates:
+- Cadence, pacing, and rhythm (e.g. staccato bursts, conversational, analytical flow)
+- Directness, vulnerability, and use of humor (e.g. deadpan, sarcastic, witty, sincere, zero-BS)
+- Vocabulary level, jargon comfort, and explicit clichés or buzzwords to avoid
+- Signature rhetorical moves, opening hooks, and conclusion instincts
+- Visual and structural preferences (e.g. lots of whitespace, punchy one-liners, bulleted takeaways)
 
-INTERVIEW ANSWERS:
+The writingInstructions must give clear, actionable directives for another writer or AI to write future articles that sound unmistakably like this author.
+
+SURVEY RESPONSES:
 ${JSON.stringify(safeAnswers, null, 2)}
 
 Return only valid JSON matching the schema.`,

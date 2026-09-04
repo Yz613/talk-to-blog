@@ -15,32 +15,110 @@ import {
 } from 'lucide-react';
 import type { VoiceInterviewAnswer, VoiceProfile } from '../types';
 
-const INTERVIEW_QUESTIONS = [
+export interface InterviewQuestion {
+  question: string;
+  hint: string;
+  placeholder?: string;
+  options?: string[];
+}
+
+const INTERVIEW_QUESTIONS: InterviewQuestion[] = [
+  {
+    question: 'How does humor or edge show up in your writing?',
+    hint: 'Pick the vibe that feels closest to you, or write your own take.',
+    options: [
+      'Dry, sarcastic, with understated deadpan humor.',
+      'Playful, witty, and lighthearted—I like making the reader smile.',
+      'Brutally direct and no-nonsense—I cut straight to the point.',
+      'Warm, sincere, and thoughtful—I rarely use jokes.',
+    ],
+  },
+  {
+    question: 'What sentence rhythm feels most like your natural voice?',
+    hint: 'Choose your cadence or describe how your thoughts flow.',
+    options: [
+      'Short. Punchy. Staccato bursts that keep momentum fast.',
+      'Conversational and flowing, like talking over coffee.',
+      'Structured and analytical: big claim first, followed by clear evidence.',
+      'Story-driven and expressive, with rich metaphors and varied tempo.',
+    ],
+  },
+  {
+    question: 'What is a one-sentence hot take you believe that most people get wrong?',
+    hint: 'Don’t overthink it—spit out one unfiltered sentence.',
+    placeholder: 'e.g. Most productivity advice is just procrastination in disguise.',
+  },
+  {
+    question: 'How do you prefer to hook a reader in the opening lines?',
+    hint: 'Select your preferred opening style.',
+    options: [
+      'Start right in the middle of the drama—zero fluff or warm-up.',
+      'A relatable personal story or mistake that reveals a bigger lesson.',
+      'A counter-intuitive claim or question that challenges assumptions.',
+      'A clear, bold promise of the exact problem we are going to solve.',
+    ],
+  },
   {
     question: 'Explain an idea you care about to one smart friend.',
-    hint: 'Write naturally. Don’t polish it—your phrasing and rhythm are what we want to learn.',
+    hint: 'Write or speak the way you would text them. Phrasing and rhythm matter more than polish.',
+    placeholder: 'The thing most people miss about this is...',
   },
   {
-    question: 'Tell a short story about a time you changed your mind.',
-    hint: 'Include the part you would emphasize if you were telling this story out loud.',
+    question: 'What is your stance on buzzwords and industry jargon?',
+    hint: 'Pick your philosophy on language.',
+    options: [
+      'Zero BS. Plain everyday English. If a fifth grader won’t get it, rewrite it.',
+      'Professional and crisp, but never stiff or academic.',
+      'Insider slang is fine when speaking to experts, but never corporate fluff.',
+      'I love vivid analogies and everyday metaphors over technical jargon.',
+    ],
   },
   {
-    question: 'What is a strong opinion you hold about your work or industry?',
-    hint: 'Say it the way you actually would, including any caveats or sharp edges.',
+    question: 'Tell a quick story about a time you realized you were wrong.',
+    hint: 'Even 1–2 sentences showing what changed your mind reveals your humility and tone.',
+    placeholder: 'I used to believe... until I realized...',
   },
   {
-    question: 'Teach me how to do something you know well.',
-    hint: 'A few paragraphs are ideal. This reveals how you structure explanations.',
+    question: 'What writing clichés or AI-sounding tropes make you cringe?',
+    hint: 'Name any words, phrases, or habits to strictly avoid.',
+    options: [
+      'Words like "delve", "testament", "tapestry", "game-changer", and "in today\'s fast-paced world".',
+      'Passive voice, endless rhetorical questions, and hollow motivational quotes.',
+      'Overly academic fluff, dense walls of text, and pretentious vocabulary.',
+      'Fake excitement with excessive exclamation marks and syrupy cheerfulness.',
+    ],
   },
   {
-    question: 'How do humor, emotion, and vulnerability show up in your writing?',
-    hint: 'Examples help, but an honest description is enough.',
+    question: 'How do you like your articles structured visually on the page?',
+    hint: 'Pick the visual layout you prefer.',
+    options: [
+      'Lots of white space: 1-2 sentence paragraphs with bold key takeaways.',
+      'Traditional essay style: cohesive, well-developed narrative paragraphs.',
+      'Tactical & scannable: bulleted lists, subheadings, and actionable callouts.',
+      'Rhythmic mix: alternate between short punchlines and deeper explanations.',
+    ],
   },
   {
-    question: 'Write a paragraph that sounds unmistakably like you.',
-    hint: 'It can be about anything. Think of this as the strongest voice sample in the interview.',
+    question: 'What is your single best rule or piece of advice?',
+    hint: 'Give your micro-lesson in 1 or 2 sentences with your natural authority.',
+    placeholder: 'Never trade long-term reputation for short-term convenience.',
   },
-] as const;
+  {
+    question: 'How do you like to end an article or essay?',
+    hint: 'Pick your signature sign-off style.',
+    options: [
+      'A sharp punchline or mic-drop sentence that lingers.',
+      'An open question that leaves the reader chewing on the idea all day.',
+      'A direct call to action: what the reader should go do right now.',
+      'A warm, reflective conclusion tying back to the original theme.',
+    ],
+  },
+  {
+    question: 'Write or speak a sentence or two that sounds unmistakably like you.',
+    hint: 'It can be about anything. This is your purest signature voice sample.',
+    placeholder: 'Say something the way only you would say it...',
+  },
+];
 
 type Stage = 'key' | 'interview' | 'overview';
 
@@ -74,8 +152,8 @@ export default function VoiceProfileModal({
       const saved = localStorage.getItem('voxscribe_interview_draft');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length === INTERVIEW_QUESTIONS.length) {
-          return parsed;
+        if (Array.isArray(parsed)) {
+          return INTERVIEW_QUESTIONS.map((_, i) => parsed[i] || '');
         }
       }
     } catch {}
@@ -108,7 +186,7 @@ export default function VoiceProfileModal({
     if (!isOpen) return;
     setError('');
     setKeyInput('');
-    setStage(hasAiAccess ? (existingProfile ? 'overview' : 'interview') : 'key');
+    setStage(existingProfile ? 'overview' : (hasAiAccess ? 'interview' : 'key'));
     if (existingProfile?.interviewAnswers?.length) {
       setAnswers(INTERVIEW_QUESTIONS.map(({ question }) =>
         existingProfile.interviewAnswers.find((item) => item.question === question)?.answer || '',
@@ -118,8 +196,8 @@ export default function VoiceProfileModal({
         const saved = localStorage.getItem(INTERVIEW_DRAFT_KEY);
         if (saved) {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length === INTERVIEW_QUESTIONS.length) {
-            setAnswers(parsed);
+          if (Array.isArray(parsed)) {
+            setAnswers(INTERVIEW_QUESTIONS.map((_, i) => parsed[i] || ''));
           }
         }
       } catch {}
@@ -127,7 +205,7 @@ export default function VoiceProfileModal({
   }, [isOpen, hasAiAccess, existingProfile]);
 
   const completedAnswers = useMemo(
-    () => answers.filter((answer) => answer.trim().length >= 20).length,
+    () => answers.filter((answer) => Boolean(answer && answer.trim().length >= 3)).length,
     [answers],
   );
 
@@ -191,11 +269,11 @@ export default function VoiceProfileModal({
   const analyzeVoice = async () => {
     const interviewAnswers: VoiceInterviewAnswer[] = INTERVIEW_QUESTIONS.map(({ question }, index) => ({
       question,
-      answer: answers[index].trim(),
-    })).filter((item) => item.answer.length >= 20);
+      answer: (answers[index] || '').trim(),
+    })).filter((item) => item.answer.length >= 3);
 
-    if (interviewAnswers.length < 3) {
-      setError('Complete at least three answers with a little detail so Gemini has enough voice to study.');
+    if (interviewAnswers.length < 2) {
+      setError('Answer at least two questions (or select options) so Gemini has enough voice cues to study.');
       return;
     }
 
@@ -237,7 +315,6 @@ export default function VoiceProfileModal({
 
   const current = INTERVIEW_QUESTIONS[questionIndex];
   const isLastQuestion = questionIndex === INTERVIEW_QUESTIONS.length - 1;
-  const canAdvance = answers[questionIndex].trim().length >= 20;
 
   const startListening = async () => {
     setError('');
@@ -461,26 +538,92 @@ export default function VoiceProfileModal({
 
         {stage === 'interview' && (
           <div className="p-6 sm:p-8">
-            <div className="flex items-center justify-between gap-4 mb-7">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
               <div>
-                <p className="text-[10px] uppercase tracking-[0.2em] text-indigo-400 font-bold">Voice interview</p>
-                <p className="text-xs text-white/40 mt-1">Question {questionIndex + 1} of {INTERVIEW_QUESTIONS.length} · {completedAnswers} answered</p>
+                <p className="text-[10px] uppercase tracking-[0.2em] text-indigo-400 font-bold">Voice Interview</p>
+                <p className="text-xs text-white/45 mt-0.5">
+                  Question {questionIndex + 1} of {INTERVIEW_QUESTIONS.length} ·{' '}
+                  <span className={completedAnswers >= 2 ? 'text-emerald-400 font-medium' : 'text-white/40'}>
+                    {completedAnswers} answered
+                  </span>
+                  {completedAnswers < 2 ? ' (minimum 2 needed)' : ' — skip or answer more for precision'}
+                </p>
               </div>
-              <div className="flex gap-1">
-                {INTERVIEW_QUESTIONS.map((_, index) => (
-                  <span key={index} className={`h-1.5 rounded-full transition-all ${index === questionIndex ? 'w-7 bg-indigo-400' : answers[index].trim().length >= 20 ? 'w-3 bg-emerald-400/70' : 'w-3 bg-white/10'}`} />
-                ))}
+              <div className="flex items-center gap-1.5 overflow-x-auto py-1 max-w-full scrollbar-none">
+                {INTERVIEW_QUESTIONS.map((_, index) => {
+                  const isCurrent = index === questionIndex;
+                  const isAnswered = Boolean(answers[index]?.trim() && answers[index].trim().length >= 3);
+                  return (
+                    <button
+                      key={index}
+                      type="button"
+                      onClick={() => {
+                        stopListening();
+                        setQuestionIndex(index);
+                      }}
+                      title={`Jump to Question ${index + 1}${isAnswered ? ' (Answered)' : ''}`}
+                      className={`h-2 rounded-full transition-all cursor-pointer ${
+                        isCurrent
+                          ? 'w-6 bg-indigo-400'
+                          : isAnswered
+                            ? 'w-2.5 bg-emerald-400 hover:bg-emerald-300'
+                            : 'w-2 bg-white/15 hover:bg-white/30'
+                      }`}
+                    />
+                  );
+                })}
               </div>
             </div>
 
             <h3 className="text-2xl sm:text-3xl font-serif italic leading-tight text-white">{current.question}</h3>
             <p className="text-sm text-white/45 mt-2 leading-relaxed">{current.hint}</p>
-            <div className="flex justify-end mt-5 mb-2">
+
+            {/* Multiple Choice Options if available */}
+            {current.options && current.options.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mt-5 mb-3">
+                {current.options.map((option, optIdx) => {
+                  const isSelected = answers[questionIndex]?.trim() === option;
+                  return (
+                    <button
+                      key={optIdx}
+                      type="button"
+                      onClick={() => {
+                        stopListening();
+                        setAnswers((currentAnswers) =>
+                          currentAnswers.map((ans, idx) => (idx === questionIndex ? option : ans)),
+                        );
+                      }}
+                      className={`text-left p-3.5 rounded-xl border text-xs leading-relaxed transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-indigo-600/20 border-indigo-500 text-white shadow-sm shadow-indigo-500/20 ring-1 ring-indigo-500'
+                          : 'bg-[#09090B] border-white/10 text-white/70 hover:text-white hover:border-white/20 hover:bg-white/5'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <span
+                          className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 mt-0.5 transition-colors ${
+                            isSelected ? 'border-indigo-400 bg-indigo-500 text-white' : 'border-white/20 bg-white/5'
+                          }`}
+                        >
+                          {isSelected && <Check className="w-2.5 h-2.5" />}
+                        </span>
+                        <span className="min-w-0">{option}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between mt-4 mb-2">
+              <span className="text-[11px] text-white/35">
+                {current.options ? 'Or tweak in your own words / speak:' : 'Your answer:'}
+              </span>
               <button
                 type="button"
                 onClick={isListening ? stopListening : startListening}
                 disabled={isBusy || isTranscribingAnswer}
-                className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-full border text-xs font-medium transition-colors cursor-pointer ${
+                className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs font-medium transition-colors cursor-pointer ${
                   isTranscribingAnswer
                     ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-300'
                     : isListening
@@ -491,7 +634,7 @@ export default function VoiceProfileModal({
                 {isTranscribingAnswer ? (
                   <>
                     <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
-                    Transcribing answer with Gemini...
+                    Transcribing...
                   </>
                 ) : isListening ? (
                   <>
@@ -506,28 +649,95 @@ export default function VoiceProfileModal({
                 )}
               </button>
             </div>
+
             <textarea
               autoFocus
-              rows={8}
-              value={answers[questionIndex]}
-              onChange={(event) => setAnswers((currentAnswers) => currentAnswers.map((answer, index) => index === questionIndex ? event.target.value : answer))}
-              placeholder="Answer the way you would actually say it…"
-              className="w-full p-4 rounded-2xl border border-white/10 bg-[#09090B] text-white placeholder-white/20 text-base leading-relaxed resize-y font-serif focus:outline-none focus:border-indigo-500"
+              rows={current.options ? 3 : 5}
+              value={answers[questionIndex] || ''}
+              onChange={(event) =>
+                setAnswers((currentAnswers) =>
+                  currentAnswers.map((answer, index) => (index === questionIndex ? event.target.value : answer)),
+                )
+              }
+              placeholder={current.placeholder || 'Answer naturally or paste a sample…'}
+              className="w-full p-4 rounded-2xl border border-white/10 bg-[#09090B] text-white placeholder-white/20 text-sm sm:text-base leading-relaxed resize-y font-serif focus:outline-none focus:border-indigo-500"
             />
-            <div className="flex items-center justify-between mt-5">
-              <button type="button" onClick={() => { stopListening(); setQuestionIndex((index) => Math.max(0, index - 1)); }} disabled={questionIndex === 0 || isBusy} className="inline-flex items-center gap-1.5 px-4 py-2 text-xs text-white/50 hover:text-white disabled:opacity-25 cursor-pointer">
+
+            <div className="flex flex-wrap items-center justify-between gap-3 mt-6 pt-4 border-t border-white/5">
+              <button
+                type="button"
+                onClick={() => {
+                  stopListening();
+                  setQuestionIndex((index) => Math.max(0, index - 1));
+                }}
+                disabled={questionIndex === 0 || isBusy}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs text-white/50 hover:text-white disabled:opacity-25 cursor-pointer"
+              >
                 <ArrowLeft className="w-3.5 h-3.5" /> Back
               </button>
-              {isLastQuestion ? (
-                <button type="button" onClick={() => { stopListening(); void analyzeVoice(); }} disabled={isBusy || isListening || completedAnswers < 3} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold disabled:opacity-40 cursor-pointer">
-                  {isBusy ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                  {isBusy ? 'Learning your voice…' : 'Build my voice profile'}
-                </button>
-              ) : (
-                <button type="button" onClick={() => { stopListening(); setQuestionIndex((index) => Math.min(INTERVIEW_QUESTIONS.length - 1, index + 1)); }} disabled={!canAdvance || isBusy || isListening} className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full bg-white text-black text-xs font-semibold hover:bg-gray-200 disabled:opacity-40 cursor-pointer">
-                  Next <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              )}
+
+              <div className="flex items-center gap-2">
+                {!isLastQuestion && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopListening();
+                      setQuestionIndex((index) => Math.min(INTERVIEW_QUESTIONS.length - 1, index + 1));
+                    }}
+                    disabled={isBusy || isListening}
+                    className="px-3.5 py-2 text-xs text-white/50 hover:text-white cursor-pointer"
+                  >
+                    Skip
+                  </button>
+                )}
+
+                {completedAnswers >= 2 && !isLastQuestion && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopListening();
+                      void analyzeVoice();
+                    }}
+                    disabled={isBusy || isListening}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-200 border border-indigo-500/30 text-xs font-semibold cursor-pointer transition-all"
+                    title="Build your profile now with your answered questions"
+                  >
+                    {isBusy ? (
+                      <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                    )}
+                    {isBusy ? 'Learning...' : `Build profile (${completedAnswers})`}
+                  </button>
+                )}
+
+                {isLastQuestion ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopListening();
+                      void analyzeVoice();
+                    }}
+                    disabled={isBusy || isListening || completedAnswers < 2}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold disabled:opacity-40 cursor-pointer shadow-lg shadow-indigo-600/30"
+                  >
+                    {isBusy ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                    {isBusy ? 'Learning your voice…' : `Build my voice profile (${completedAnswers} answered)`}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopListening();
+                      setQuestionIndex((index) => Math.min(INTERVIEW_QUESTIONS.length - 1, index + 1));
+                    }}
+                    disabled={isBusy || isListening}
+                    className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full bg-white text-black text-xs font-semibold hover:bg-gray-200 cursor-pointer"
+                  >
+                    Next <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
             {error && <p role="alert" className="text-xs text-rose-300 mt-4 text-right">{error}</p>}
           </div>

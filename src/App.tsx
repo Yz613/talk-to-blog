@@ -26,6 +26,8 @@ const STORAGE_KEY = 'voice_to_medium_drafts_v1';
 const MAX_SAVED_DRAFTS = 50;
 const VOICE_PROFILE_KEY = 'voxscribe_voice_profile_v1';
 const SESSION_API_KEY = 'voxscribe_gemini_key_session';
+const PERSISTENT_API_KEY = 'voxscribe_gemini_key_persistent';
+const LAST_ACTIVE_ARTICLE_KEY = 'voxscribe_last_active_story_id';
 
 interface ServiceStatus {
   aiConfigured: boolean;
@@ -70,7 +72,13 @@ export default function App() {
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [storySession, setStorySession] = useState(0);
   const [isVoiceProfileOpen, setIsVoiceProfileOpen] = useState(false);
-  const [apiKey, setApiKey] = useState(() => sessionStorage.getItem(SESSION_API_KEY) || '');
+  const [apiKey, setApiKey] = useState(() => {
+    try {
+      return sessionStorage.getItem(SESSION_API_KEY) || localStorage.getItem(PERSISTENT_API_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
   const [voiceProfile, setVoiceProfile] = useState<VoiceProfile | null>(() => {
     try {
       const saved = localStorage.getItem(VOICE_PROFILE_KEY);
@@ -81,14 +89,32 @@ export default function App() {
     }
   });
 
-  // Load saved drafts from localStorage
+  const selectArticle = (article: MediumArticle | null) => {
+    setCurrentArticle(article);
+    try {
+      if (article) {
+        localStorage.setItem(LAST_ACTIVE_ARTICLE_KEY, article.id);
+      } else {
+        localStorage.removeItem(LAST_ACTIVE_ARTICLE_KEY);
+      }
+    } catch {}
+  };
+
+  // Load saved drafts and restore the active article from localStorage
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
+        if (Array.isArray(parsed) && parsed.length > 0) {
           setDrafts(parsed);
+          const lastActiveId = localStorage.getItem(LAST_ACTIVE_ARTICLE_KEY);
+          const toRestore = (lastActiveId && parsed.find((d: MediumArticle) => d.id === lastActiveId)) || parsed[0];
+          if (toRestore) {
+            setCurrentArticle(toRestore);
+            setRawTranscript(toRestore.sourceTranscript || '');
+            setActiveTab('article');
+          }
         }
       }
     } catch (e) {
@@ -115,15 +141,21 @@ export default function App() {
   });
 
   const handleApiKeyChange = (key: string) => {
-    sessionStorage.setItem(SESSION_API_KEY, key);
+    try {
+      sessionStorage.setItem(SESSION_API_KEY, key);
+      localStorage.setItem(PERSISTENT_API_KEY, key);
+    } catch {}
     setApiKey(key);
     showStatus('Gemini connected. Now let’s learn your voice.');
   };
 
   const handleDisconnectKey = () => {
-    sessionStorage.removeItem(SESSION_API_KEY);
+    try {
+      sessionStorage.removeItem(SESSION_API_KEY);
+      localStorage.removeItem(PERSISTENT_API_KEY);
+    } catch {}
     setApiKey('');
-    showStatus('The Gemini key was removed from this browser session.');
+    showStatus('The Gemini key was removed from this browser.');
   };
 
   const handleSaveVoiceProfile = (profile: VoiceProfile) => {
@@ -215,7 +247,7 @@ export default function App() {
         generationMode: generatedData.generationMode || 'ai',
       };
 
-      setCurrentArticle(newArticle);
+      selectArticle(newArticle);
       const updatedList = [newArticle, ...drafts.filter((d) => d.id !== newArticle.id)];
       saveDraftsToStorage(updatedList);
 
@@ -269,7 +301,7 @@ export default function App() {
         generationMode: refined.generationMode || currentArticle.generationMode,
       };
 
-      setCurrentArticle(updatedArticle);
+      selectArticle(updatedArticle);
       const updatedList = drafts.map((d) =>
         d.id === updatedArticle.id ? updatedArticle : d
       );
@@ -292,7 +324,7 @@ export default function App() {
       wordCount: contentMarkdown.trim() ? contentMarkdown.trim().split(/\s+/).length : 0,
       readTimeMinutes: Math.max(1, Math.ceil((contentMarkdown.trim().split(/\s+/).filter(Boolean).length) / 220)),
     };
-    setCurrentArticle(updated);
+    selectArticle(updated);
     const updatedList = drafts.map((d) => (d.id === updated.id ? updated : d));
     saveDraftsToStorage(updatedList);
   };
@@ -304,7 +336,7 @@ export default function App() {
       ...currentArticle,
       seo: { ...currentArticle.seo, ...updatedSeoFields },
     };
-    setCurrentArticle(updated);
+    selectArticle(updated);
     const updatedList = drafts.map((d) => (d.id === updated.id ? updated : d));
     saveDraftsToStorage(updatedList);
   };
@@ -314,7 +346,7 @@ export default function App() {
     const remaining = drafts.filter((d) => d.id !== id);
     saveDraftsToStorage(remaining);
     if (currentArticle?.id === id) {
-      setCurrentArticle(remaining[0] || null);
+      selectArticle(remaining[0] || null);
       if (remaining.length === 0) {
         setActiveTab('voice');
       }
@@ -323,6 +355,7 @@ export default function App() {
 
   // Start fresh voice recording
   const handleNewStory = () => {
+    selectArticle(null);
     setRawTranscript('');
     setStorySession((session) => session + 1);
     setActiveTab('voice');
@@ -588,7 +621,7 @@ export default function App() {
         onClose={() => setIsHistoryOpen(false)}
         drafts={drafts}
         onSelectDraft={(draft) => {
-          setCurrentArticle(draft);
+          selectArticle(draft);
           setRawTranscript(draft.sourceTranscript || '');
           setActiveTab('article');
         }}
