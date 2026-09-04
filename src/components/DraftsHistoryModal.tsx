@@ -1,4 +1,5 @@
-import { Clock, Trash2, ArrowRight, X, FileText, Tag, Sparkles } from 'lucide-react';
+import { useRef, ChangeEvent } from 'react';
+import { Clock, Trash2, ArrowRight, X, FileText, Download, Upload } from 'lucide-react';
 import { MediumArticle } from '../types';
 
 interface DraftsHistoryModalProps {
@@ -7,6 +8,8 @@ interface DraftsHistoryModalProps {
   drafts: MediumArticle[];
   onSelectDraft: (draft: MediumArticle) => void;
   onDeleteDraft: (id: string) => void;
+  onImportDrafts: (drafts: unknown[]) => void;
+  onError?: (message: string) => void;
 }
 
 export default function DraftsHistoryModal({
@@ -15,8 +18,36 @@ export default function DraftsHistoryModal({
   drafts,
   onSelectDraft,
   onDeleteDraft,
+  onImportDrafts,
+  onError,
 }: DraftsHistoryModalProps) {
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   if (!isOpen) return null;
+
+  const exportDrafts = () => {
+    const backup = JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), drafts }, null, 2);
+    const url = URL.createObjectURL(new Blob([backup], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `voxscribe-stories-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importDrafts = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      const candidates = Array.isArray(parsed) ? parsed : parsed?.drafts;
+      if (!Array.isArray(candidates)) throw new Error('This is not a VoxScribe backup file.');
+      onImportDrafts(candidates);
+    } catch (error: any) {
+      onError?.(error?.message || 'Could not import that backup file.');
+    } finally {
+      event.target.value = '';
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
@@ -29,13 +60,23 @@ export default function DraftsHistoryModal({
               Saved Stories &amp; Voice Brainstorms ({drafts.length})
             </h3>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1.5">
+            <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={importDrafts} />
+            <button type="button" onClick={() => importInputRef.current?.click()} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-white/50 hover:text-white hover:bg-white/5 transition-colors cursor-pointer" title="Import stories backup">
+              <Upload className="w-3.5 h-3.5" /> Import
+            </button>
+            <button type="button" onClick={exportDrafts} disabled={!drafts.length} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-white/50 hover:text-white hover:bg-white/5 transition-colors cursor-pointer disabled:opacity-30" title="Export stories backup">
+              <Download className="w-3.5 h-3.5" /> Export
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+              aria-label="Close saved stories"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* List of Drafts */}

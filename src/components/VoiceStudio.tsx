@@ -13,6 +13,8 @@ import {
   FileText,
   Lightbulb,
   CheckCircle2,
+  Download,
+  RefreshCw,
 } from 'lucide-react';
 import { ArticleLength, ArticleTone, GenerationOptions } from '../types';
 
@@ -20,6 +22,9 @@ interface VoiceStudioProps {
   onGenerate: (transcript: string, options: GenerationOptions) => void;
   isGenerating: boolean;
   initialTranscript?: string;
+  canTranscribeAudio?: boolean;
+  apiKey?: string;
+  onError?: (message: string) => void;
 }
 
 const SAMPLE_TOPICS = [
@@ -49,12 +54,25 @@ export default function VoiceStudio({
   onGenerate,
   isGenerating,
   initialTranscript = '',
+  canTranscribeAudio = false,
+  apiKey = '',
+  onError,
 }: VoiceStudioProps) {
-  const [transcript, setTranscript] = useState(initialTranscript);
+  const [transcript, setTranscript] = useState(() => {
+    if (initialTranscript) return initialTranscript;
+    try {
+      return localStorage.getItem('voxscribe_active_transcript') || '';
+    } catch {
+      return '';
+    }
+  });
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [showOptions, setShowOptions] = useState(false);
+  const [speechRecognitionBlocked, setSpeechRecognitionBlocked] = useState(false);
+  const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
+  const [recordedAudioBlob, setRecordedAudioBlob] = useState<Blob | null>(null);
 
   // Settings
   const [tone, setTone] = useState<ArticleTone>('thought-leadership');
@@ -72,6 +90,18 @@ export default function VoiceStudio({
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const isRecordingRef = useRef(false);
+
+  // Auto-save transcript to localStorage so thoughts are never lost
+  useEffect(() => {
+    try {
+      if (transcript.trim()) {
+        localStorage.setItem('voxscribe_active_transcript', transcript);
+      } else {
+        localStorage.removeItem('voxscribe_active_transcript');
+      }
+    } catch {}
+  }, [transcript]);
 
   // Update transcript if initialTranscript changes
   useEffect(() => {
@@ -79,6 +109,19 @@ export default function VoiceStudio({
       setTranscript(initialTranscript);
     }
   }, [initialTranscript]);
+
+  useEffect(() => () => {
+    isRecordingRef.current = false;
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      // The recognizer may already be stopped.
+    }
+    mediaRecorderRef.current?.stream.getTracks().forEach((track) => track.stop());
+    audioContextRef.current?.close().catch(() => {});
+  }, []);
 
   // Audio waveform visualizer
   const startVisualizer = (stream: MediaStream) => {
@@ -146,8 +189,13 @@ export default function VoiceStudio({
   // Start speech recognition & microphone recording
   const startRecording = async () => {
     try {
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+        throw new Error('This browser does not support microphone recording. You can still type or paste your ideas.');
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioChunksRef.current = [];
+      isRecordingRef.current = true;
+      setSpeechRecognitionBlocked(false);
 
       // Start waveform
       startVisualizer(stream);
@@ -167,57 +215,60 @@ export default function VoiceStudio({
         (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
       if (SpeechRecognition) {
-        const recognition = new SpeechRecognition();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.lang = 'en-US';
+        let currentBase = transcript;
+        if (currentBase && !currentBase.endsWith(' ')) currentBase += ' ';
 
-        let currentBaseTranscript = transcript;
-        if (currentBaseTranscript && !currentBaseTranscript.endsWith(' ')) {
-          currentBaseTranscript += ' ';
-        }
+        const launchSpeechRecognition = () => {
+          if (!isRecordingRef.current) return;
+          try {
+            const recognition = new SpeechRecognition();
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.lang = navigator.language || 'en-US';
 
-        recognition.onresult = (event: any) => {
-          let interimTranscript = '';
-          let finalTranscript = '';
+            recognition.onresult = (event: any) => {
+              let interimTranscript = '';
+              let finalTranscript = '';
 
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const item = event.results[i];
-            if (item.isFinal) {
-              finalTranscript += item[0].transcript + ' ';
-            } else {
-              interimTranscript += item[0].transcript;
-            }
+              for (let i = event.resultIndex; i < event.results.length; i++) {
+                const item = event.results[i];
+                if (item.isFinal) {
+                  finalTranscript += item[0].transcript + ' ';
+                } else {
+                  interimTranscript += item[0].transcript;
+                }
+              }
+
+              if (finalTranscript) {
+                currentBase += finalTranscript;
+              }
+
+              setTranscript(currentBase + interimTranscript);
+            };
+
+            recognition.onerror = (event: any) => {
+              console.warn('Speech recognition notice in studio:', event.error);
+              if (event.error === 'network' || event.error === 'not-allowed') {
+                setSpeechRecognitionBlocked(true);
+              }
+            };
+
+            recognition.onend = () => {
+              recognitionRef.current = null;
+              // Cleanly re-instantiate fresh SpeechRecognition if still recording
+              if (isRecordingRef.current) {
+                setTimeout(launchSpeechRecognition, 100);
+              }
+            };
+
+            recognitionRef.current = recognition;
+            recognition.start();
+          } catch (e) {
+            console.warn('Recognition start error:', e);
           }
-
-          if (finalTranscript) {
-            currentBaseTranscript += finalTranscript;
-          }
-
-          setTranscript(currentBaseTranscript + interimTranscript);
         };
 
-        recognition.onerror = (event: any) => {
-          console.warn('Speech recognition warning/error:', event.error);
-        };
-
-        recognition.onend = () => {
-          // Restart if still flagged as recording
-          if (isRecording && recognitionRef.current) {
-            try {
-              recognition.start();
-            } catch {
-              // Ignore if already active
-            }
-          }
-        };
-
-        recognitionRef.current = recognition;
-        try {
-          recognition.start();
-        } catch (e) {
-          console.warn('Recognition start error:', e);
-        }
+        launchSpeechRecognition();
       }
 
       setIsRecording(true);
@@ -227,12 +278,14 @@ export default function VoiceStudio({
       }, 1000);
     } catch (err: any) {
       console.error('Microphone access denied:', err);
-      alert('Could not access your microphone. Please check your browser microphone permissions.');
+      isRecordingRef.current = false;
+      onError?.(err?.message || 'Could not access your microphone. Please check browser microphone permissions.');
     }
   };
 
   // Stop recording
   const stopRecording = async () => {
+    isRecordingRef.current = false;
     setIsRecording(false);
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
@@ -241,68 +294,101 @@ export default function VoiceStudio({
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
-        recognitionRef.current = null;
       } catch {
         // No-op
       }
+      recognitionRef.current = null;
     }
 
     stopVisualizer();
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      const shouldUseServerTranscription = !transcript.trim();
+      mediaRecorderRef.current.onstop = () => {
+        if (audioChunksRef.current.length > 0) {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          setRecordedAudioBlob(audioBlob);
+          const url = URL.createObjectURL(audioBlob);
+          setRecordedAudioUrl(url);
+
+          if (shouldUseServerTranscription) {
+            if (canTranscribeAudio) {
+              void transcribeAudioBlob(audioBlob);
+            } else {
+              onError?.('No live transcript was captured. Add a Gemini API key for server-side audio transcription, or download your audio note below.');
+            }
+          }
+        }
+      };
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
-
-      // If transcript is still empty (e.g. Web Speech API was unavailable or silent),
-      // we automatically send the recorded audio to Gemini transcribe!
-      setTimeout(async () => {
-        if (!transcript.trim() && audioChunksRef.current.length > 0) {
-          await transcribeRecordedAudioChunks();
-        }
-      }, 400);
     }
   };
 
-  // Transcribe recorded audio with server-side Gemini 3.5 transcribe
-  const transcribeRecordedAudioChunks = async () => {
+  // Transcribe recorded audio with server-side Gemini
+  const transcribeAudioBlob = async (audioBlob: Blob) => {
     try {
       setIsTranscribingAudio(true);
-      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
       const reader = new FileReader();
 
-      reader.onloadend = async () => {
-        const base64Audio = reader.result as string;
-        try {
-          const res = await fetch('/api/transcribe', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              audioData: base64Audio,
-              mimeType: 'audio/webm',
-            }),
-          });
-          const data = await res.json();
-          if (data.transcript) {
-            setTranscript((prev) => (prev ? `${prev}\n\n${data.transcript}` : data.transcript));
+      await new Promise<void>((resolve, reject) => {
+        reader.onloadend = async () => {
+          const base64Audio = reader.result as string;
+          try {
+            const res = await fetch('/api/transcribe', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(apiKey ? { 'x-gemini-api-key': apiKey } : {}),
+              },
+              body: JSON.stringify({
+                audioData: base64Audio,
+                mimeType: 'audio/webm',
+              }),
+            });
+            const data = await res.json() as { transcript?: string; error?: string };
+            if (!res.ok) throw new Error(data.error || 'Audio transcription failed.');
+            if (data.transcript) {
+              setTranscript((prev) => (prev ? `${prev}\n\n${data.transcript}` : data.transcript));
+            }
+            resolve();
+          } catch (err: any) {
+            console.error('Fallback transcription error:', err);
+            onError?.(err?.message || 'Audio transcription failed.');
+            reject(err);
+          } finally {
+            setIsTranscribingAudio(false);
           }
-        } catch (err) {
-          console.error('Fallback transcription error:', err);
-        } finally {
-          setIsTranscribingAudio(false);
-        }
-      };
-
-      reader.readAsDataURL(audioBlob);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(audioBlob);
+      });
     } catch (e) {
       console.error('Transcribe error:', e);
       setIsTranscribingAudio(false);
     }
   };
 
+  const retryTranscription = async () => {
+    if (!recordedAudioBlob) return;
+    await transcribeAudioBlob(recordedAudioBlob);
+  };
+
   // Audio file upload handler
   const handleFileUpload = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (!canTranscribeAudio) {
+      onError?.('Audio uploads need a Gemini API key. Live browser dictation and typed notes are available now.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      onError?.('Please choose an audio file smaller than 20 MB.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
 
     setIsTranscribingAudio(true);
     const reader = new FileReader();
@@ -311,22 +397,24 @@ export default function VoiceStudio({
       try {
         const res = await fetch('/api/transcribe', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(apiKey ? { 'x-gemini-api-key': apiKey } : {}),
+          },
           body: JSON.stringify({
             audioData: base64,
             mimeType: file.type || 'audio/mp3',
           }),
         });
-        const data = await res.json();
+        const data = await res.json() as { transcript?: string; error?: string };
+        if (!res.ok) throw new Error(data.error || 'Audio transcription failed.');
         if (data.transcript) {
           setTranscript((prev) =>
             prev ? `${prev}\n\n${data.transcript}` : data.transcript
           );
-        } else if (data.error) {
-          alert(`Transcription error: ${data.error}`);
-        }
+        } else throw new Error('The audio did not contain a usable transcript.');
       } catch (err: any) {
-        alert(`Failed to transcribe audio file: ${err.message}`);
+        onError?.(`Failed to transcribe audio file: ${err.message}`);
       } finally {
         setIsTranscribingAudio(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
@@ -401,9 +489,9 @@ export default function VoiceStudio({
               type="button"
               id="upload-audio-file-btn"
               onClick={() => fileInputRef.current?.click()}
-              disabled={isRecording || isTranscribingAudio}
+              disabled={!canTranscribeAudio || isRecording || isTranscribingAudio}
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-white/80 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full transition-colors cursor-pointer disabled:opacity-40"
-              title="Upload existing voice memo (.mp3, .m4a, .wav)"
+              title={canTranscribeAudio ? 'Upload existing voice memo (.mp3, .m4a, .wav)' : 'Add GEMINI_API_KEY to enable audio uploads'}
             >
               <Upload className="w-3.5 h-3.5" />
               Upload Audio Note
@@ -503,10 +591,49 @@ export default function VoiceStudio({
             {isRecording && (
               <div className="absolute bottom-3 right-3 flex items-center gap-1.5 bg-indigo-600/20 border border-indigo-500/30 px-3 py-1 rounded-full text-[11px] font-medium text-indigo-300">
                 <Volume2 className="w-3 h-3 animate-pulse text-indigo-400" />
-                Live dictation active
+                {speechRecognitionBlocked ? 'Audio recording active' : 'Live dictation active'}
               </div>
             )}
           </div>
+
+          {speechRecognitionBlocked && isRecording && (
+            <div className="mt-2.5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-200 text-xs flex items-start gap-2.5">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse mt-1 flex-shrink-0" />
+              <div className="leading-relaxed">
+                <strong className="font-semibold text-amber-300">Brave is blocking live dictation:</strong> Don’t worry! Your microphone is recording your full audio note. When you click stop, it will be automatically transcribed with Gemini.
+              </div>
+            </div>
+          )}
+
+          {recordedAudioUrl && (
+            <div className="mt-3 p-3 rounded-xl bg-white/[0.03] border border-white/10 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2">
+                <Volume2 className="w-4 h-4 text-indigo-400 flex-shrink-0" />
+                <span className="text-white/70 font-medium">Recorded audio preserved:</span>
+                <audio src={recordedAudioUrl} controls className="h-7 max-w-[200px] sm:max-w-xs" />
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={recordedAudioUrl}
+                  download="voxscribe_audio_note.webm"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white/80 border border-white/10 transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" /> Download audio
+                </a>
+                {canTranscribeAudio && (
+                  <button
+                    type="button"
+                    onClick={() => void retryTranscription()}
+                    disabled={isTranscribingAudio}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 transition-colors cursor-pointer disabled:opacity-40"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isTranscribingAudio ? 'animate-spin' : ''}`} />
+                    {isTranscribingAudio ? 'Transcribing…' : 'Retry Gemini transcription'}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Topic Inspirations (Quick Sparks) */}

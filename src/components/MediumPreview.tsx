@@ -91,6 +91,7 @@ ${article.contentMarkdown}
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // Swap title with one of the AI alternatives
@@ -178,7 +179,7 @@ ${article.contentMarkdown}
       <div className="bg-[#0D0D10] border border-white/10 rounded-2xl shadow-xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <span className="px-3 py-1 rounded-full text-xs font-mono uppercase tracking-wider bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-            Medium Publication Ready
+            {article.generationMode === 'local' ? 'Local Draft Ready' : 'Medium Publication Ready'}
           </span>
           <span className="text-xs text-white/40 font-mono">
             {article.readTimeMinutes} min read • {article.wordCount} words

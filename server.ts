@@ -1,20 +1,44 @@
-import express from "express";
+import express, { type Request } from "express";
 import path from "path";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
-import { createServer as createViteServer } from "vite";
+import { generateArticleLocally, refineArticleLocally } from "./src/server/localArticle";
+import type { ArticleLength, ArticleTone } from "./src/types";
 
 dotenv.config();
 
-const app = express();
-const PORT = 3000;
+export const app = express();
+const PORT = Number(process.env.PORT) || 3000;
+const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-3.8-flash";
+const TRANSCRIPTION_MODEL = process.env.GEMINI_TRANSCRIPTION_MODEL || "gemini-2.5-flash";
 
 app.use(express.json({ limit: "30mb" }));
 app.use(express.urlencoded({ extended: true, limit: "30mb" }));
+app.use("/api", (_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
 
 // Lazy GoogleGenAI client
-function getGenAI(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
+function getServerApiKey(): string | null {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") return null;
+  return apiKey;
+}
+
+function getApiKey(req?: Request): string | null {
+  const sessionHeader = req?.get("x-gemini-api-key");
+  if (sessionHeader !== undefined) {
+    const sessionKey = sessionHeader.trim();
+    return sessionKey.length >= 10 && sessionKey.length <= 256 && !/\s/.test(sessionKey)
+      ? sessionKey
+      : null;
+  }
+  return getServerApiKey();
+}
+
+function getGenAI(req?: Request): GoogleGenAI {
+  const apiKey = getApiKey(req);
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY is not configured in environment.");
   }
@@ -29,14 +53,97 @@ function getGenAI(): GoogleGenAI {
 }
 
 // Health check endpoint
-app.get("/api/health", (_req, res) => {
+app.get("/api/health", (req, res) => {
+  const sessionKeyPresent = Boolean(req.get("x-gemini-api-key"));
+  const aiConfigured = Boolean(getApiKey(req));
   res.json({
     status: "ok",
-    hasApiKey: Boolean(process.env.GEMINI_API_KEY),
+    aiConfigured,
+    serverKeyConfigured: Boolean(getServerApiKey()),
+    keySource: sessionKeyPresent ? "session" : getServerApiKey() ? "server" : "none",
+    generationMode: aiConfigured ? "ai" : "local",
+    textModel: aiConfigured ? TEXT_MODEL : null,
+    transcriptionAvailable: aiConfigured,
   });
 });
 
-// Audio transcription endpoint using gemini-3.5-transcribe
+app.post("/api/test-key", async (req, res) => {
+  try {
+    if (!req.get("x-gemini-api-key")) {
+      return res.status(400).json({ error: "Enter a Gemini API key first." });
+    }
+    const response = await getGenAI(req).models.generateContent({
+      model: TEXT_MODEL,
+      contents: "Reply with exactly: connected",
+    });
+    if (!response.text?.toLowerCase().includes("connected")) {
+      throw new Error("Gemini returned an unexpected response.");
+    }
+    res.json({ connected: true, model: TEXT_MODEL });
+  } catch (error: any) {
+    console.error("Gemini connection test failed:", error?.message || error);
+    res.status(401).json({
+      error: "Gemini could not verify that key. Check the key and its API access, then try again.",
+    });
+  }
+});
+
+app.post("/api/analyze-voice", async (req, res) => {
+  try {
+    const answers = req.body?.answers;
+    if (!Array.isArray(answers) || answers.length < 3) {
+      return res.status(400).json({ error: "Complete at least three voice interview answers." });
+    }
+    if (!getApiKey(req)) {
+      return res.status(401).json({ error: "Connect Gemini before building a voice profile." });
+    }
+
+    const safeAnswers = answers.slice(0, 10).map((item: any) => ({
+      question: String(item?.question || "").slice(0, 300),
+      answer: String(item?.answer || "").slice(0, 4_000),
+    })).filter((item: { answer: string }) => item.answer.trim().length >= 20);
+
+    if (safeAnswers.length < 3) {
+      return res.status(400).json({ error: "Give a little more detail in at least three answers." });
+    }
+
+    const response = await getGenAI(req).models.generateContent({
+      model: TEXT_MODEL,
+      contents: `You are a meticulous writing-style analyst. Build a reusable voice profile from the author's interview answers below.
+
+Infer HOW this person communicates—not their opinions as universal facts. Capture cadence, directness, humor, emotional register, favorite rhetorical moves, vocabulary level, paragraph rhythm, and what would sound unlike them. The final writingInstructions must be specific enough for another writer to imitate the voice while preserving factual accuracy. Never infer sensitive personal attributes.
+
+INTERVIEW ANSWERS:
+${JSON.stringify(safeAnswers, null, 2)}
+
+Return only valid JSON matching the schema.`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            name: { type: Type.STRING, description: "A short memorable name for this writing voice" },
+            summary: { type: Type.STRING, description: "Two-sentence description of the voice" },
+            traits: { type: Type.ARRAY, items: { type: Type.STRING } },
+            sentenceStyle: { type: Type.STRING },
+            vocabulary: { type: Type.ARRAY, items: { type: Type.STRING } },
+            signatureMoves: { type: Type.ARRAY, items: { type: Type.STRING } },
+            avoidances: { type: Type.ARRAY, items: { type: Type.STRING } },
+            writingInstructions: { type: Type.STRING, description: "A detailed directive for writing new articles in this voice" },
+          },
+          required: ["name", "summary", "traits", "sentenceStyle", "vocabulary", "signatureMoves", "avoidances", "writingInstructions"],
+        },
+      },
+    });
+
+    res.json(JSON.parse(response.text || "{}"));
+  } catch (error: any) {
+    console.error("Voice analysis error:", error?.message || error);
+    res.status(500).json({ error: "Gemini could not build the voice profile. Please try again." });
+  }
+});
+
+// Audio transcription endpoint with multimodal Gemini fallback
 app.post("/api/transcribe", async (req, res) => {
   try {
     const { audioData, mimeType } = req.body;
@@ -44,17 +151,27 @@ app.post("/api/transcribe", async (req, res) => {
       return res.status(400).json({ error: "Missing audioData in request." });
     }
 
-    const ai = getGenAI();
+    if (!getApiKey(req)) {
+      return res.status(503).json({
+        error: "Audio transcription needs a Gemini API key. Live browser dictation and typed notes still work without one.",
+      });
+    }
+
+    const ai = getGenAI(req);
     // Clean base64 string if data URL prefix is included
     const base64Clean = audioData.includes("base64,")
       ? audioData.split("base64,")[1]
       : audioData;
 
-    const effectiveMime = mimeType || "audio/webm";
+    // Normalize MIME type (strip codecs parameter for Gemini compatibility, e.g. audio/webm;codecs=opus -> audio/webm)
+    const rawMime = mimeType || "audio/webm";
+    const effectiveMime = rawMime.split(";")[0].trim().toLowerCase() || "audio/webm";
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-transcribe",
-      contents: {
+    const promptText = "Please accurately transcribe this audio recording of someone brainstorming their ideas, thoughts, and concepts. Preserve all key thoughts, terminology, and natural phrasing without unnecessary pleasantries or hallucinations.";
+
+    const contents = [
+      {
+        role: "user",
         parts: [
           {
             inlineData: {
@@ -63,13 +180,37 @@ app.post("/api/transcribe", async (req, res) => {
             },
           },
           {
-            text: "Please accurately transcribe this audio recording of someone brainstorming their ideas, thoughts, and concepts. Preserve all key thoughts, terminology, and natural phrasing without unnecessary pleasantries or hallucinations.",
+            text: promptText,
           },
         ],
       },
-    });
+    ];
 
-    const transcript = response.text || "";
+    let transcript = "";
+    // Try primary transcription model first, then fallback to gemini-2.5-flash and TEXT_MODEL
+    const modelsToTry = Array.from(new Set([TRANSCRIPTION_MODEL, "gemini-2.5-flash", TEXT_MODEL]));
+
+    let lastError: any = null;
+    for (const model of modelsToTry) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents,
+        });
+        transcript = response.text || "";
+        if (transcript.trim()) {
+          break;
+        }
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`Transcription attempt with model "${model}" failed:`, err?.message || err);
+      }
+    }
+
+    if (!transcript.trim() && lastError) {
+      throw lastError;
+    }
+
     res.json({ transcript: transcript.trim() });
   } catch (error: any) {
     console.error("Transcription error:", error);
@@ -88,6 +229,7 @@ app.post("/api/generate-article", async (req, res) => {
       targetAudience = "Curious professionals & creators",
       readingLength = "medium",
       customInstructions = "",
+      voiceProfile,
     } = req.body;
 
     if (!transcript || typeof transcript !== "string" || !transcript.trim()) {
@@ -96,7 +238,33 @@ app.post("/api/generate-article", async (req, res) => {
         .json({ error: "Please provide a transcript or brainstorm text." });
     }
 
-    const ai = getGenAI();
+    const validTones: ArticleTone[] = [
+      "thought-leadership",
+      "technical-deepdive",
+      "personal-narrative",
+      "pragmatic-guide",
+      "opinionated",
+    ];
+    const validLengths: ArticleLength[] = ["short", "medium", "in-depth"];
+    const safeTone: ArticleTone = validTones.includes(tone) ? tone : "thought-leadership";
+    const safeLength: ArticleLength = validLengths.includes(readingLength) ? readingLength : "medium";
+    const safeAudience = typeof targetAudience === "string"
+      ? targetAudience.slice(0, 300)
+      : "Curious professionals & creators";
+    const safeInstructions = typeof customInstructions === "string"
+      ? customInstructions.slice(0, 1_000)
+      : "";
+
+    if (!getApiKey(req)) {
+      return res.json(generateArticleLocally(transcript, {
+        tone: safeTone,
+        targetAudience: safeAudience,
+        readingLength: safeLength,
+        customInstructions: safeInstructions,
+      }));
+    }
+
+    const ai = getGenAI(req);
 
     const toneGuides: Record<string, string> = {
       "thought-leadership":
@@ -140,6 +308,19 @@ Core Rules:
    - Also provide 5 alternative/niche tags that could be swapped in.
    - Include rationale for why each primary tag was chosen.`;
 
+    const safeVoiceProfile = voiceProfile && typeof voiceProfile === "object"
+      ? JSON.stringify({
+          name: String(voiceProfile.name || "").slice(0, 100),
+          summary: String(voiceProfile.summary || "").slice(0, 1_000),
+          traits: Array.isArray(voiceProfile.traits) ? voiceProfile.traits.slice(0, 12) : [],
+          sentenceStyle: String(voiceProfile.sentenceStyle || "").slice(0, 1_000),
+          vocabulary: Array.isArray(voiceProfile.vocabulary) ? voiceProfile.vocabulary.slice(0, 30) : [],
+          signatureMoves: Array.isArray(voiceProfile.signatureMoves) ? voiceProfile.signatureMoves.slice(0, 12) : [],
+          avoidances: Array.isArray(voiceProfile.avoidances) ? voiceProfile.avoidances.slice(0, 12) : [],
+          writingInstructions: String(voiceProfile.writingInstructions || "").slice(0, 5_000),
+        }, null, 2)
+      : "";
+
     const userPrompt = `Transform the following spoken brainstorm into a published-quality Medium article:
 
 RAW IDEAS / TRANSCRIPT:
@@ -148,15 +329,20 @@ ${transcript.trim()}
 """
 
 STYLE & CONFIGURATION:
-- Tone Style: ${toneGuides[tone] || toneGuides["thought-leadership"]}
-- Target Audience: ${targetAudience}
-- Target Length: ${lengthGuides[readingLength] || lengthGuides["medium"]}
-${customInstructions ? `- Custom Creator Instructions: ${customInstructions}` : ""}
+- Tone Style: ${toneGuides[safeTone]}
+- Target Audience: ${safeAudience}
+- Target Length: ${lengthGuides[safeLength]}
+${safeInstructions ? `- Custom Creator Instructions: ${safeInstructions}` : ""}
+${safeVoiceProfile ? `
+AUTHOR VOICE PROFILE:
+${safeVoiceProfile}
+
+Voice fidelity is a first-class requirement. Preserve the author's characteristic cadence, vocabulary, directness, humor, and rhetorical habits while still producing a polished article. Do not copy biographical claims from the profile unless they also appear in the current transcript.` : ""}
 
 Return the result strictly as a valid JSON object matching the requested schema.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
+      model: TEXT_MODEL,
       contents: userPrompt,
       config: {
         systemInstruction: systemPrompt,
@@ -314,7 +500,7 @@ Return the result strictly as a valid JSON object matching the requested schema.
     });
 
     const parsed = JSON.parse(response.text || "{}");
-    res.json(parsed);
+    res.json({ ...parsed, generationMode: "ai" });
   } catch (error: any) {
     console.error("Generate article error:", error);
     res.status(500).json({
@@ -326,12 +512,20 @@ Return the result strictly as a valid JSON object matching the requested schema.
 // Refine or tweak generated article
 app.post("/api/refine-article", async (req, res) => {
   try {
-    const { article, instruction } = req.body;
+    const { article, instruction, voiceProfile } = req.body;
     if (!article || !instruction) {
       return res.status(400).json({ error: "Missing article or instruction." });
     }
 
-    const ai = getGenAI();
+    if (typeof instruction !== "string" || instruction.length > 1_000) {
+      return res.status(400).json({ error: "Refinement instructions must be under 1,000 characters." });
+    }
+
+    if (!getApiKey(req)) {
+      return res.json(refineArticleLocally(article, instruction));
+    }
+
+    const ai = getGenAI(req);
 
     const prompt = `You are a master Medium editor and SEO expert.
 Here is the current Medium article:
@@ -343,11 +537,13 @@ ${article.contentMarkdown}
 User's requested refinement:
 "${instruction}"
 
+${voiceProfile?.writingInstructions ? `Author voice instructions:\n${String(voiceProfile.writingInstructions).slice(0, 5_000)}\n` : ""}
+
 Please update the article according to this request. Keep the structure, SEO tags, and flow coherent.
 Return updated content strictly as JSON.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
+      model: TEXT_MODEL,
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -369,7 +565,7 @@ Return updated content strictly as JSON.`;
     });
 
     const parsed = JSON.parse(response.text || "{}");
-    res.json(parsed);
+    res.json({ ...parsed, generationMode: "ai" });
   } catch (error: any) {
     console.error("Refine article error:", error);
     res.status(500).json({
@@ -381,15 +577,16 @@ Return updated content strictly as JSON.`;
 // Vite / static server integration
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    const distPath = path.join(process.cwd(), "dist", "client");
     app.use(express.static(distPath));
-    app.get("*", (_req, res) => {
+    app.get("/{*splat}", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
@@ -399,4 +596,7 @@ async function startServer() {
   });
 }
 
-startServer();
+// Cloudflare imports this Express app and supplies its own HTTP server bridge.
+if (!(globalThis as any).WebSocketPair) {
+  startServer();
+}

@@ -42,6 +42,7 @@ export interface MediumArticle {
   createdAt: string;
   sourceTranscript: string;
   tone: string;
+  generationMode?: 'ai' | 'local';
 }
 
 export type ArticleTone =
@@ -58,4 +59,22 @@ export interface GenerationOptions {
   targetAudience: string;
   readingLength: ArticleLength;
   customInstructions: string;
+}
+
+export interface VoiceInterviewAnswer {
+  question: string;
+  answer: string;
+}
+
+export interface VoiceProfile {
+  name: string;
+  summary: string;
+  traits: string[];
+  sentenceStyle: string;
+  vocabulary: string[];
+  signatureMoves: string[];
+  avoidances: string[];
+  writingInstructions: string;
+  interviewAnswers: VoiceInterviewAnswer[];
+  updatedAt: string;
 }
