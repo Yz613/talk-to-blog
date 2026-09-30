@@ -82,6 +82,14 @@ You can personalize how articles are written by teaching the app your natural sp
 
 ---
 
+## Supporting Sources & Hyperlinks
+
+With Gemini connected, each new article and revision automatically researches your notes with Google Search. Specific factual claims are checked against supporting evidence, with preference for responsible government agencies, original research, official datasets, and other primary sources. Broader themes receive relevant background reading. Search happens in a separate step from article formatting so source URLs come from search metadata rather than invented links.
+
+Articles include natural Markdown hyperlinks, which remain clickable in the reading preview and rich-text copy to Medium, and are preserved in Markdown downloads. The **Sources & Fact Review** panel explains the relevance of each source, separates claim evidence from background reading, and lists unsupported, contradictory, or ambiguous claims for review. **Find supporting sources** can research an older draft; **Refresh sources** checks an edited story again. Research is a writing aid, so review the linked evidence before publishing.
+
+If source search fails or returns no usable links, the article still finishes with a visible research notice. Local Writing Mode works offline and does not search or invent sources. Google Search grounding uses your existing Gemini key and may incur additional usage charges; see [Google's grounding documentation](https://ai.google.dev/gemini-api/docs/generate-content/google-search).
+
 ## Privacy & Local Storage
 
 - **100% Private to Your Browser**: Your drafts, voice interview answers, and voice profile are saved in your browser's `localStorage`. No external database is used.

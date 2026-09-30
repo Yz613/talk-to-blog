@@ -5,6 +5,7 @@ import type {
   MediumArticle,
   VoiceProfile,
 } from '../types';
+import { localResearch } from './articleResearch';
 
 export interface GeneratedArticle
   extends Omit<MediumArticle, 'id' | 'createdAt' | 'sourceTranscript' | 'tone'> {
@@ -179,6 +180,7 @@ export function generateArticleLocally(
     wordCount,
     contentMarkdown,
     executiveSummary: `A structured exploration of ${topic} that preserves the source idea and turns it into a practical argument for ${audience}.`,
+    research: { ...localResearch, sources: [], unresolvedClaims: [] },
     seo: {
       seoTitle: trimTo(title, 60),
       metaDescription,
@@ -376,4 +378,3 @@ export function adaptVoiceLocally(
     adaptationSummary: summary,
   };
 }
-

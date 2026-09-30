@@ -28,6 +28,7 @@ import {
   LoaderCircle,
 } from 'lucide-react';
 import { MediumArticle, TagItem, VoiceProfile } from '../types';
+import ArticleSources from './ArticleSources';
 import {
   parseMarkdownToHtml,
   copyFormattedTextToClipboard,
@@ -42,6 +43,7 @@ interface MediumPreviewProps {
   onRefineSection: (instruction: string) => Promise<void>;
   onSyncVoiceFromEdits?: () => Promise<void>;
   isRefining: boolean;
+  canResearch: boolean;
   isSyncingVoice?: boolean;
 }
 
@@ -52,6 +54,7 @@ export default function MediumPreview({
   onRefineSection,
   onSyncVoiceFromEdits,
   isRefining,
+  canResearch,
   isSyncingVoice = false,
 }: MediumPreviewProps) {
   const [viewMode, setViewMode] = useState<EditorViewMode>('edit');
@@ -638,6 +641,8 @@ ${article.contentMarkdown}
           {renderReadingPreview()}
         </div>
       )}
+
+      <ArticleSources article={article} isRefining={isRefining} canResearch={canResearch} onResearch={onRefineSection} />
 
       {/* Medium Tags & Publications Section */}
       <div className="bg-[#0D0D10] border border-white/10 rounded-2xl p-6 sm:p-8">

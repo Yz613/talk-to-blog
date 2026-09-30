@@ -760,7 +760,7 @@ export default function VoiceStudio({
             <div className="w-4 h-4 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-[10px]">
               ✓
             </div>
-            Includes automatic SEO scoring, meta tags, and top 5 Medium tags.
+            Includes SEO, Medium tags, and supporting source links with Gemini.
           </div>
 
           <button

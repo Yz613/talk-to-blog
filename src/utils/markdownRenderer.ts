@@ -1,4 +1,5 @@
 /** A deliberately small, escaped Markdown renderer for article previews and Medium copy. */
+import { tokenizeInline } from './markdownLinks';
 
 function escapeHtml(value: string): string {
   return value
@@ -9,12 +10,27 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#039;');
 }
 
-function renderInline(value: string): string {
+function renderEmphasis(value: string): string {
   return escapeHtml(value)
-    .replace(/`([^`]+)`/g, '<code class="bg-white/5 text-indigo-300 px-2 py-0.5 rounded font-mono text-xs border border-white/10">$1</code>')
     .replace(/\*\*\*(.+?)\*\*\*/g, '<strong class="text-white font-semibold"><em>$1</em></strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>')
     .replace(/\*(.+?)\*/g, '<em class="text-white/90">$1</em>');
+}
+
+function renderInline(value: string): string {
+  // Protect generated tags from emphasis parsing; format labels separately.
+  const protectedHtml: string[] = [];
+  const text = tokenizeInline(value).map((token) => {
+    if (token.type === 'text') return token.text;
+    const html = token.type === 'code'
+      ? `<code class="bg-white/5 text-indigo-300 px-2 py-0.5 rounded font-mono text-xs border border-white/10">${escapeHtml(token.text)}</code>`
+      : token.url
+        ? `<a href="${escapeHtml(token.url)}" target="_blank" rel="noopener noreferrer" class="text-indigo-300 underline underline-offset-4 hover:text-indigo-200">${renderEmphasis(token.text)}</a>`
+        : renderEmphasis(token.text);
+    protectedHtml.push(html);
+    return `\u0000${protectedHtml.length - 1}\u0000`;
+  }).join('');
+  return renderEmphasis(text).replace(/\u0000(\d+)\u0000/g, (_, index) => protectedHtml[Number(index)] || '');
 }
 
 export function parseMarkdownToHtml(markdown: string): string {

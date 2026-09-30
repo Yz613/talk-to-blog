@@ -33,6 +33,26 @@ export interface ArticleDraftSnapshot {
   contentMarkdown: string;
 }
 
+export interface ArticleSource {
+  id: string;
+  title: string;
+  url: string;
+  evidence: string[];
+  kind?: 'claim' | 'background';
+  relevance?: string;
+  anchorText?: string;
+  linked?: boolean;
+}
+
+export interface ArticleResearch {
+  status: 'complete' | 'no-sources' | 'unavailable' | 'local';
+  sources: ArticleSource[];
+  unresolvedClaims: string[];
+  notice?: string;
+  searchedAt?: string;
+  searchSuggestionsHtml?: string;
+}
+
 export interface MediumArticle {
   id: string;
   title: string;
@@ -49,6 +69,7 @@ export interface MediumArticle {
   sourceTranscript: string;
   tone: string;
   generationMode?: 'ai' | 'local';
+  research?: ArticleResearch;
   initialAiDraft?: ArticleDraftSnapshot;
   lastVoiceSyncAt?: string;
 }
@@ -87,4 +108,3 @@ export interface VoiceProfile {
   updatedAt: string;
   adaptationNotes?: string[];
 }
-

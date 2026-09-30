@@ -15,7 +15,7 @@ import {
   TrendingUp,
   UserRound,
 } from 'lucide-react';
-import { MediumArticle, GenerationOptions, ArticleSeo, VoiceProfile } from './types';
+import { MediumArticle, GenerationOptions, ArticleSeo, VoiceProfile, ArticleResearch } from './types';
 import VoiceStudio from './components/VoiceStudio';
 import MediumPreview from './components/MediumPreview';
 import SeoDashboard from './components/SeoDashboard';
@@ -42,6 +42,7 @@ interface GeneratedArticleResponse extends Omit<MediumArticle, 'id' | 'createdAt
 }
 
 interface RefinedArticleResponse {
+  research?: ArticleResearch;
   title?: string;
   subtitle?: string;
   contentMarkdown?: string;
@@ -216,7 +217,7 @@ export default function App() {
     setRawTranscript(transcript);
     setIsGenerating(true);
     setStatusIsError(false);
-    setStatusMessage('Transforming spoken thoughts into viral Medium article...');
+    setStatusMessage('Finding supporting sources and crafting your article…');
 
     try {
       const response = await fetch('/api/generate-article', {
@@ -261,6 +262,7 @@ export default function App() {
         sourceTranscript: transcript,
         tone: options.tone,
         generationMode: generatedData.generationMode || 'ai',
+        research: generatedData.research,
         initialAiDraft: initialDraft,
       };
 
@@ -383,6 +385,7 @@ export default function App() {
           seoScore: refined.updatedSeoScore || currentArticle.seo.seoScore,
         },
         generationMode: refined.generationMode || currentArticle.generationMode,
+        research: refined.research,
         initialAiDraft: refinedSnapshot,
       };
 
@@ -696,6 +699,7 @@ export default function App() {
               onRefineSection={handleRefine}
               onSyncVoiceFromEdits={() => handleSyncVoiceFromEdits()}
               isRefining={isRefining}
+              canResearch={Boolean(serviceStatus?.aiConfigured)}
               isSyncingVoice={isSyncingVoice}
             />
           </div>

@@ -1,6 +1,7 @@
 import express, { type Request } from "express";
 import path from "path";
 import dotenv from "dotenv";
+import { applyResearch, citationSchemaProperties, localResearch, researchArticle, researchInstructions } from "./src/server/articleResearch";
 import { GoogleGenAI, Type } from "@google/genai";
 import {
   generateArticleLocally,
@@ -338,6 +339,9 @@ Core Rules:
         }, null, 2)
       : "";
 
+    // Research is automatic: spoken facts and broad topics both benefit from sources.
+    const research = await researchArticle(ai, TEXT_MODEL, transcript.trim());
+
     const userPrompt = `Transform the following spoken brainstorm into a published-quality Medium article:
 
 RAW IDEAS / TRANSCRIPT:
@@ -355,6 +359,8 @@ AUTHOR VOICE PROFILE:
 ${safeVoiceProfile}
 
 Voice fidelity is a first-class requirement. Preserve the author's characteristic cadence, vocabulary, directness, humor, and rhetorical habits while still producing a polished article. Do not copy biographical claims from the profile unless they also appear in the current transcript.` : ""}
+
+${researchInstructions(research)}
 
 Return the result strictly as a valid JSON object matching the requested schema.`;
 
@@ -499,6 +505,7 @@ Return the result strictly as a valid JSON object matching the requested schema.
               description:
                 "2-3 top Medium publications that would accept this story (e.g. Towards Data Science, Better Humans, The Startup)",
             },
+            ...citationSchemaProperties,
           },
           required: [
             "title",
@@ -511,13 +518,15 @@ Return the result strictly as a valid JSON object matching the requested schema.
             "seo",
             "tags",
             "suggestedPublications",
+            "sourceSuggestions",
+            "unresolvedClaims",
           ],
         },
       },
     });
 
     const parsed = JSON.parse(response.text || "{}");
-    res.json({ ...parsed, generationMode: "ai" });
+    res.json({ ...applyResearch(parsed, research), generationMode: "ai" });
   } catch (error: any) {
     console.error("Generate article error:", error);
     res.status(500).json({
@@ -539,10 +548,13 @@ app.post("/api/refine-article", async (req, res) => {
     }
 
     if (!getApiKey(req)) {
-      return res.json(refineArticleLocally(article, instruction));
+      return res.json({ ...refineArticleLocally(article, instruction), research: localResearch });
     }
 
     const ai = getGenAI(req);
+
+    const research = await researchArticle(ai, TEXT_MODEL,
+      `${article.sourceTranscript || ""}\n\n${article.title}\n${article.subtitle}\n${article.contentMarkdown}\n\nRequested revision: ${instruction}`);
 
     const prompt = `You are a master Medium editor and SEO expert.
 Here is the current Medium article:
@@ -557,6 +569,8 @@ User's requested refinement:
 ${voiceProfile?.writingInstructions ? `Author voice instructions:\n${String(voiceProfile.writingInstructions).slice(0, 5_000)}\n` : ""}
 
 Please update the article according to this request. Keep the structure, SEO tags, and flow coherent.
+${researchInstructions(research)}
+${research.research.status !== "complete" ? "Source search did not return new evidence. Preserve existing hyperlinks on unchanged claims and topics. Do not introduce new links." : ""}
 Return updated content strictly as JSON.`;
 
     const response = await ai.models.generateContent({
@@ -575,14 +589,15 @@ Return updated content strictly as JSON.`;
               description: "Brief note of what was improved",
             },
             updatedSeoScore: { type: Type.INTEGER },
+            ...citationSchemaProperties,
           },
-          required: ["title", "subtitle", "contentMarkdown", "revisionSummary"],
+          required: ["title", "subtitle", "contentMarkdown", "revisionSummary", "sourceSuggestions", "unresolvedClaims"],
         },
       },
     });
 
     const parsed = JSON.parse(response.text || "{}");
-    res.json({ ...parsed, generationMode: "ai" });
+    res.json({ ...applyResearch(parsed, research, article), generationMode: "ai" });
   } catch (error: any) {
     console.error("Refine article error:", error);
     res.status(500).json({
@@ -752,6 +767,6 @@ async function startServer() {
 }
 
 // Cloudflare imports this Express app and supplies its own HTTP server bridge.
-if (!(globalThis as any).WebSocketPair) {
+if (process.env.NODE_ENV !== "test" && !(globalThis as any).WebSocketPair) {
   startServer();
 }
