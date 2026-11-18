@@ -26,8 +26,11 @@ import {
   ListOrdered,
   Code,
   LoaderCircle,
+  HelpCircle,
+  Database,
 } from 'lucide-react';
-import { MediumArticle, TagItem, VoiceProfile } from '../types';
+import { MediumArticle, TagItem, VoiceProfile, VoiceDilemma } from '../types';
+import { BUILTIN_VOICE_DILEMMAS } from '../server/localArticle';
 import ArticleSources from './ArticleSources';
 import {
   parseMarkdownToHtml,
@@ -42,6 +45,12 @@ interface MediumPreviewProps {
   onUpdateArticle: (updated: Partial<MediumArticle>) => void;
   onRefineSection: (instruction: string) => Promise<void>;
   onSyncVoiceFromEdits?: () => Promise<void>;
+  onTogglePublished?: () => void;
+  onSyncVoiceFromCorpus?: () => Promise<void>;
+  onRevoiceArticle?: (instructions?: string) => Promise<void>;
+  onSaveVoiceProfile?: (profile: VoiceProfile) => void;
+  publishedStoriesCount?: number;
+  apiKey?: string;
   isRefining: boolean;
   canResearch: boolean;
   isSyncingVoice?: boolean;
@@ -53,6 +62,12 @@ export default function MediumPreview({
   onUpdateArticle,
   onRefineSection,
   onSyncVoiceFromEdits,
+  onTogglePublished,
+  onSyncVoiceFromCorpus,
+  onRevoiceArticle,
+  onSaveVoiceProfile,
+  publishedStoriesCount = 0,
+  apiKey,
   isRefining,
   canResearch,
   isSyncingVoice = false,
@@ -64,7 +79,109 @@ export default function MediumPreview({
   const [claps, setClaps] = useState(48);
   const [isSaved, setIsSaved] = useState(false);
 
+  // Continuous Voice Dilemmas & Calibration State
+  const [showCalibrationCard, setShowCalibrationCard] = useState(false);
+  const [dilemmas, setDilemmas] = useState<VoiceDilemma[]>(BUILTIN_VOICE_DILEMMAS);
+  const [currentDilemmaIndex, setCurrentDilemmaIndex] = useState(0);
+  const [customDilemmaAnswer, setCustomDilemmaAnswer] = useState('');
+  const [isSubmittingDilemma, setIsSubmittingDilemma] = useState(false);
+  const [dilemmaFeedback, setDilemmaFeedback] = useState<string | null>(null);
+  const [isGeneratingDilemmas, setIsGeneratingDilemmas] = useState(false);
+
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const currentDilemma = dilemmas[currentDilemmaIndex % dilemmas.length];
+
+  const handleFetchFreshDilemmas = async () => {
+    setIsGeneratingDilemmas(true);
+    try {
+      const response = await fetch('/api/generate-voice-dilemmas', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { 'x-gemini-api-key': apiKey } : {}),
+        },
+        body: JSON.stringify({
+          article,
+          voiceProfile,
+        }),
+      });
+      if (response.ok) {
+        const data = (await response.json()) as { dilemmas?: VoiceDilemma[] };
+        if (Array.isArray(data.dilemmas) && data.dilemmas.length > 0) {
+          setDilemmas(data.dilemmas);
+          setCurrentDilemmaIndex(0);
+          setDilemmaFeedback(null);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to fetch fresh dilemmas:', err);
+    } finally {
+      setIsGeneratingDilemmas(false);
+    }
+  };
+
+  const handleChooseDilemma = async (choice: 'A' | 'B') => {
+    if (!currentDilemma) return;
+    setIsSubmittingDilemma(true);
+    try {
+      const response = await fetch('/api/submit-voice-dilemma', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dilemma: currentDilemma,
+          choice,
+          voiceProfile,
+        }),
+      });
+      if (response.ok) {
+        const data = (await response.json()) as { profile?: VoiceProfile; feedback?: string };
+        if (data.profile && onSaveVoiceProfile) {
+          onSaveVoiceProfile(data.profile);
+        }
+        setDilemmaFeedback(data.feedback || 'Choice saved: calibrated your personal voice profile.');
+      }
+    } catch (err) {
+      console.warn('Failed to submit dilemma:', err);
+    } finally {
+      setIsSubmittingDilemma(false);
+    }
+  };
+
+  const handleCustomDilemmaSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!currentDilemma || !customDilemmaAnswer.trim()) return;
+    setIsSubmittingDilemma(true);
+    try {
+      const response = await fetch('/api/submit-voice-dilemma', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dilemma: currentDilemma,
+          choice: 'custom',
+          customText: customDilemmaAnswer.trim(),
+          voiceProfile,
+        }),
+      });
+      if (response.ok) {
+        const data = (await response.json()) as { profile?: VoiceProfile; feedback?: string };
+        if (data.profile && onSaveVoiceProfile) {
+          onSaveVoiceProfile(data.profile);
+        }
+        setDilemmaFeedback(data.feedback || 'Custom signature take added to your voice!');
+        setCustomDilemmaAnswer('');
+      }
+    } catch (err) {
+      console.warn('Failed to submit custom dilemma:', err);
+    } finally {
+      setIsSubmittingDilemma(false);
+    }
+  };
+
+  const handleNextDilemma = () => {
+    setDilemmaFeedback(null);
+    setCurrentDilemmaIndex((prev) => (prev + 1) % dilemmas.length);
+  };
 
   const initialDraft = article.initialAiDraft;
   const hasEditsSinceAi = Boolean(
@@ -439,47 +556,94 @@ ${article.contentMarkdown}
     <div className="w-full max-w-5xl mx-auto space-y-6">
       {/* Top Action Toolbar */}
       <div className="bg-[#0D0D10] border border-white/10 rounded-2xl shadow-xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3">
-        {/* Left: View Mode Switcher */}
-        <div className="flex items-center gap-1 p-1 bg-black/40 border border-white/10 rounded-xl">
-          <button
-            type="button"
-            onClick={() => setViewMode('edit')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-              viewMode === 'edit'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-white/60 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Edit3 className="w-3.5 h-3.5" />
-            <span>Story Editor</span>
-          </button>
+        {/* Left: View Mode Switcher & Voice Actions */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 p-1 bg-black/40 border border-white/10 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setViewMode('edit')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+                viewMode === 'edit'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-white/60 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              <span>Story Editor</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setViewMode('split')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-              viewMode === 'split'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-white/60 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Columns className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Split View</span>
-            <span className="sm:hidden">Split</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('split')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+                viewMode === 'split'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-white/60 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              <Columns className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Split View</span>
+              <span className="sm:hidden">Split</span>
+            </button>
 
+            <button
+              type="button"
+              onClick={() => setViewMode('preview')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+                viewMode === 'preview'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-white/60 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Medium Preview</span>
+              <span className="sm:hidden">Preview</span>
+            </button>
+          </div>
+
+          {/* Published Toggle */}
+          {onTogglePublished && (
+            <button
+              type="button"
+              onClick={onTogglePublished}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-full border transition-all cursor-pointer ${
+                article.isPublished
+                  ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
+                  : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/10 hover:text-white'
+              }`}
+              title={article.isPublished ? 'Story is marked as published' : 'Mark as published to train your voice corpus'}
+            >
+              {article.isPublished ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Published Story</span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-3.5 h-3.5 text-white/40" />
+                  <span>Mark as Published</span>
+                </>
+              )}
+            </button>
+          )}
+
+          {/* Voice Trainer Toggle */}
           <button
             type="button"
-            onClick={() => setViewMode('preview')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
-              viewMode === 'preview'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-white/60 hover:text-white hover:bg-white/5'
+            onClick={() => setShowCalibrationCard(!showCalibrationCard)}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-full border transition-all cursor-pointer ${
+              showCalibrationCard
+                ? 'bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-600/25'
+                : 'bg-indigo-950/40 border-indigo-500/30 text-indigo-300 hover:bg-indigo-900/40'
             }`}
           >
-            <Eye className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Medium Preview</span>
-            <span className="sm:hidden">Preview</span>
+            <HelpCircle className="w-3.5 h-3.5" />
+            <span>Voice Trainer</span>
+            {voiceProfile?.dilemmasAnsweredCount ? (
+              <span className="px-1.5 py-0.2 rounded-full bg-indigo-500/30 text-[10px] font-mono text-indigo-200">
+                {voiceProfile.dilemmasAnsweredCount}
+              </span>
+            ) : null}
           </button>
         </div>
 
@@ -536,6 +700,173 @@ ${article.contentMarkdown}
           </button>
         </div>
       </div>
+
+      {/* Voice Calibration Dilemma Card ("Would you say this or that?") */}
+      {showCalibrationCard && (
+        <div className="bg-[#0D0D10] border border-indigo-500/40 rounded-2xl p-5 sm:p-6 shadow-2xl relative overflow-hidden transition-all">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-300">
+                <HelpCircle className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                  Voice Trainer: Would you say this or that?
+                </h4>
+                <p className="text-[11px] text-white/50">
+                  Pick your natural instinct or type your own custom take to teach the writer your real cadence.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleFetchFreshDilemmas}
+                disabled={isGeneratingDilemmas}
+                className="text-xs text-indigo-300 hover:text-indigo-200 inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                title="Generate questions tailored to this story"
+              >
+                <Sparkles className="w-3 h-3" />
+                <span>{isGeneratingDilemmas ? 'Generating...' : 'Refresh Questions'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCalibrationCard(false)}
+                className="text-white/40 hover:text-white p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {currentDilemma ? (
+            <div className="space-y-4">
+              <div className="p-3 bg-white/5 rounded-xl border border-white/5">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-indigo-400 font-bold block mb-1">
+                  Scenario · {currentDilemma.category}
+                </span>
+                <p className="text-xs sm:text-sm text-white/90 font-serif">
+                  {currentDilemma.scenario}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => handleChooseDilemma('A')}
+                  disabled={isSubmittingDilemma}
+                  className="text-left p-3.5 rounded-xl bg-[#09090C] border border-white/10 hover:border-indigo-500/50 hover:bg-white/5 transition-all cursor-pointer group disabled:opacity-50"
+                >
+                  <div className="text-[10px] font-mono text-white/40 group-hover:text-indigo-300 mb-1">
+                    {currentDilemma.labelA || 'Option A'}
+                  </div>
+                  <div className="text-xs text-white/80 group-hover:text-white font-serif leading-relaxed">
+                    "{currentDilemma.optionA}"
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleChooseDilemma('B')}
+                  disabled={isSubmittingDilemma}
+                  className="text-left p-3.5 rounded-xl bg-[#09090C] border border-white/10 hover:border-indigo-500/50 hover:bg-white/5 transition-all cursor-pointer group disabled:opacity-50"
+                >
+                  <div className="text-[10px] font-mono text-white/40 group-hover:text-indigo-300 mb-1">
+                    {currentDilemma.labelB || 'Option B'}
+                  </div>
+                  <div className="text-xs text-white/80 group-hover:text-white font-serif leading-relaxed">
+                    "{currentDilemma.optionB}"
+                  </div>
+                </button>
+              </div>
+
+              {/* Custom Answer Input */}
+              <form onSubmit={handleCustomDilemmaSubmit} className="flex gap-2">
+                <input
+                  type="text"
+                  value={customDilemmaAnswer}
+                  onChange={(e) => setCustomDilemmaAnswer(e.target.value)}
+                  placeholder="Or write what you'd actually say..."
+                  disabled={isSubmittingDilemma}
+                  className="flex-1 text-xs bg-[#09090C] border border-white/10 rounded-xl px-3.5 py-2.5 text-white placeholder-white/30 focus:outline-none focus:border-indigo-500"
+                />
+                <button
+                  type="submit"
+                  disabled={!customDilemmaAnswer.trim() || isSubmittingDilemma}
+                  className="px-4 py-2.5 rounded-xl bg-white text-black hover:bg-gray-200 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-40"
+                >
+                  Save Custom Take
+                </button>
+              </form>
+
+              {/* Feedback Toast & Next */}
+              <div className="flex items-center justify-between pt-2">
+                {dilemmaFeedback ? (
+                  <div className="text-xs text-emerald-400 font-mono flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>{dilemmaFeedback}</span>
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-white/30 font-mono">
+                    Question {currentDilemmaIndex + 1} of {dilemmas.length}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={handleNextDilemma}
+                  className="text-xs text-white/60 hover:text-white font-semibold flex items-center gap-1 cursor-pointer ml-auto"
+                >
+                  Next Question →
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {/* Published Corpus Voice Learning Banner */}
+      {publishedStoriesCount && publishedStoriesCount > 0 ? (
+        <div className="bg-indigo-950/25 border border-indigo-500/30 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xl">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-indigo-600/25 border border-indigo-500/35 flex items-center justify-center text-indigo-300 flex-shrink-0 mt-0.5 sm:mt-0">
+              <Database className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-white">
+                  Published Corpus Calibration
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                  {publishedStoriesCount} {publishedStoriesCount === 1 ? 'story' : 'stories'} ready
+                </span>
+              </div>
+              <p className="text-xs text-white/60 mt-0.5">
+                Compare your finalized published articles against what the AI originally drafted to extract your authentic vocabulary, rhythm, and banned clichés.
+              </p>
+            </div>
+          </div>
+          {onSyncVoiceFromCorpus && (
+            <button
+              type="button"
+              onClick={onSyncVoiceFromCorpus}
+              disabled={isSyncingVoice}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white text-black hover:bg-gray-200 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50 flex-shrink-0"
+            >
+              {isSyncingVoice ? (
+                <>
+                  <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                  Calibrating Corpus...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                  Calibrate from Published Stories
+                </>
+              )}
+            </button>
+          )}
+        </div>
+      ) : null}
 
       {/* Voice Learning & Adaptation Bar */}
       {hasEditsSinceAi && (
@@ -739,15 +1070,41 @@ ${article.contentMarkdown}
 
       {/* AI Section Refiner Bar */}
       <div className="bg-[#0A0A0C] text-white rounded-2xl border border-indigo-500/20 shadow-2xl p-6">
-        <div className="flex items-center gap-2 mb-2">
-          <Wand2 className="w-4 h-4 text-indigo-400" />
-          <h4 className="text-sm font-bold tracking-tight text-white">
-            AI Section Refiner &amp; Polish Assistant
-          </h4>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <Wand2 className="w-4 h-4 text-indigo-400" />
+              <h4 className="text-sm font-bold tracking-tight text-white">
+                AI Section Refiner &amp; Voice Polish Assistant
+              </h4>
+            </div>
+            <p className="text-xs text-white/40">
+              Tweak the story tone, punch up a section, or purge AI clichés and apply your calibrated voice.
+            </p>
+          </div>
+
+          {onRevoiceArticle && (
+            <button
+              type="button"
+              onClick={() => onRevoiceArticle()}
+              disabled={isRefining}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-semibold shadow-lg shadow-indigo-600/30 transition-all cursor-pointer disabled:opacity-50 flex-shrink-0"
+              title="Re-voice this entire draft using your calibrated voice profile and strip AI buzzwords"
+            >
+              {isRefining ? (
+                <>
+                  <LoaderCircle className="w-4 h-4 animate-spin" />
+                  <span>Re-voicing Story...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4 text-white" />
+                  <span>Re-Voice (Purge AI Clichés)</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
-        <p className="text-xs text-white/40 mb-4">
-          Want to tweak the story tone, punch up a section, or add extra depth? Click a preset or type an instruction.
-        </p>
 
         {/* Presets */}
         <div className="flex flex-wrap gap-2 mb-4">

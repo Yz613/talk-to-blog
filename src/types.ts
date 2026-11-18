@@ -72,6 +72,9 @@ export interface MediumArticle {
   research?: ArticleResearch;
   initialAiDraft?: ArticleDraftSnapshot;
   lastVoiceSyncAt?: string;
+  isPublished?: boolean;
+  publishedAt?: string;
+  publishedSnapshot?: ArticleDraftSnapshot;
 }
 
 export type ArticleTone =
@@ -95,6 +98,16 @@ export interface VoiceInterviewAnswer {
   answer: string;
 }
 
+export interface VoiceDilemma {
+  id: string;
+  category: 'opening' | 'transition' | 'humor' | 'opinion' | 'cadence' | 'conclusion' | 'clarity';
+  scenario: string;
+  optionA: string;
+  optionB: string;
+  labelA?: string;
+  labelB?: string;
+}
+
 export interface VoiceProfile {
   name: string;
   summary: string;
@@ -103,8 +116,11 @@ export interface VoiceProfile {
   vocabulary: string[];
   signatureMoves: string[];
   avoidances: string[];
+  bannedWordsAndPhrases?: string[];
   writingInstructions: string;
   interviewAnswers: VoiceInterviewAnswer[];
   updatedAt: string;
   adaptationNotes?: string[];
+  corpusArticleCount?: number;
+  dilemmasAnsweredCount?: number;
 }

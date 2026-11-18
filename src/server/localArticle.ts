@@ -3,6 +3,7 @@ import type {
   ArticleLength,
   ArticleTone,
   MediumArticle,
+  VoiceDilemma,
   VoiceProfile,
 } from '../types';
 import { localResearch } from './articleResearch';
@@ -376,5 +377,371 @@ export function adaptVoiceLocally(
   return {
     profile: updatedProfile,
     adaptationSummary: summary,
+  };
+}
+
+export interface CorpusPair {
+  original: ArticleDraftSnapshot;
+  published: ArticleDraftSnapshot;
+  title?: string;
+}
+
+/**
+ * Learn and adapt a Voice Profile across multiple published articles
+ * compared against their initial AI drafts.
+ */
+export function adaptVoiceFromCorpusLocally(
+  pairs: CorpusPair[],
+  currentProfile?: VoiceProfile | null,
+): { profile: VoiceProfile; adaptationSummary: string } {
+  if (!pairs || pairs.length === 0) {
+    return {
+      profile: currentProfile || {
+        name: 'My Voice',
+        summary: 'Default voice profile.',
+        traits: ['Authentic', 'Clear'],
+        sentenceStyle: 'Balanced, conversational cadence.',
+        vocabulary: [],
+        signatureMoves: [],
+        avoidances: [],
+        writingInstructions: 'Write naturally and clearly.',
+        interviewAnswers: [],
+        updatedAt: new Date().toISOString(),
+      },
+      adaptationSummary: 'No published story pairs provided.',
+    };
+  }
+
+  const traits = new Set<string>(currentProfile?.traits || []);
+  const vocabulary = new Set<string>(currentProfile?.vocabulary || []);
+  const signatureMoves = new Set<string>(currentProfile?.signatureMoves || []);
+  const avoidances = new Set<string>(currentProfile?.avoidances || []);
+  const bannedWords = new Set<string>(currentProfile?.bannedWordsAndPhrases || []);
+
+  const removedFrequency = new Map<string, number>();
+  const addedFrequency = new Map<string, number>();
+  let totalOrigWords = 0;
+  let totalPublishedWords = 0;
+  let totalOrigSentences = 0;
+  let totalPublishedSentences = 0;
+
+  const AI_CLICHES = new Set([
+    'delve', 'testament', 'tapestry', 'game-changer', 'revolutionize',
+    'pivotal', 'landscape', 'realm', 'beacon', 'unleash', 'leverage',
+    'moreover', 'furthermore', 'crucial', 'foster', 'underscore',
+    'in conclusion', 'in today\'s fast-paced world', 'it is worth noting',
+    'it is important to remember', 'dive deep', 'demystify',
+  ]);
+
+  for (const pair of pairs) {
+    const origText = pair.original.contentMarkdown || '';
+    const pubText = pair.published.contentMarkdown || '';
+
+    const origWords = origText.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/).filter(Boolean);
+    const pubWords = pubText.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/).filter(Boolean);
+    const origSentences = sentencesFrom(origText);
+    const pubSentences = sentencesFrom(pubText);
+
+    totalOrigWords += origWords.length;
+    totalPublishedWords += pubWords.length;
+    totalOrigSentences += origSentences.length;
+    totalPublishedSentences += pubSentences.length;
+
+    const pubWordSet = new Set(pubWords);
+    const origWordSet = new Set(origWords);
+
+    for (const w of origWords) {
+      if (!pubWordSet.has(w) && (AI_CLICHES.has(w) || w.length > 5)) {
+        removedFrequency.set(w, (removedFrequency.get(w) || 0) + 1);
+      }
+    }
+
+    for (const w of pubWords) {
+      if (!origWordSet.has(w) && w.length > 4 && !STOP_WORDS.has(w)) {
+        addedFrequency.set(w, (addedFrequency.get(w) || 0) + 1);
+      }
+    }
+  }
+
+  // Sentence length analysis across all articles
+  const avgOrigLen = totalOrigSentences > 0 ? totalOrigWords / totalOrigSentences : 15;
+  const avgPubLen = totalPublishedSentences > 0 ? totalPublishedWords / totalPublishedSentences : 15;
+  let sentenceStyle = currentProfile?.sentenceStyle || 'Direct, authentic conversational flow.';
+
+  if (avgPubLen < avgOrigLen * 0.85) {
+    sentenceStyle = 'Punchy, staccato cadence with short, impactful sentences and zero corporate fluff.';
+    traits.add('Punchy');
+    traits.add('Direct');
+    traits.add('No-Fluff');
+  } else if (avgPubLen > avgOrigLen * 1.15) {
+    sentenceStyle = 'Storyteller cadence with rich context, vivid anecdotes, and flowing narrative paragraphs.';
+    traits.add('Narrative');
+    traits.add('Thoughtful');
+  } else {
+    traits.add('Authentic');
+    traits.add('Clear');
+  }
+
+  // Identify systematically removed words
+  const sortedRemoved = [...removedFrequency.entries()].sort((a, b) => b[1] - a[1]);
+  for (const [w, count] of sortedRemoved.slice(0, 10)) {
+    if (count >= 1 || AI_CLICHES.has(w)) {
+      bannedWords.add(w);
+      avoidances.add(`Never use "${w}"`);
+    }
+  }
+
+  // Identify systematically added words/phrases
+  const sortedAdded = [...addedFrequency.entries()].sort((a, b) => b[1] - a[1]);
+  for (const [w] of sortedAdded.slice(0, 10)) {
+    vocabulary.add(w);
+  }
+
+  signatureMoves.add('Cut formulaic corporate transitions in favor of direct statements');
+  signatureMoves.add('Prioritize personal conviction and honest reflection over generic AI summaries');
+
+  const summary = `Corpus voice calibrated from ${pairs.length} published story ${pairs.length === 1 ? 'comparison' : 'comparisons'}. Identified ${bannedWords.size} banned clichés and adopted ${vocabulary.size} signature vocabulary patterns.`;
+
+  const updatedNotes = [
+    ...(currentProfile?.adaptationNotes || []),
+    `${new Date().toLocaleDateString()}: ${summary}`,
+  ].slice(-10);
+
+  const updatedProfile: VoiceProfile = {
+    name: currentProfile?.name || 'My Authentic Voice',
+    summary: `Voice calibrated across ${pairs.length} published articles. Characterized by ${Array.from(traits).slice(0, 3).join(', ')} style.`,
+    traits: Array.from(traits).slice(0, 12),
+    sentenceStyle,
+    vocabulary: Array.from(vocabulary).slice(0, 25),
+    signatureMoves: Array.from(signatureMoves).slice(0, 10),
+    avoidances: Array.from(avoidances).slice(0, 10),
+    bannedWordsAndPhrases: Array.from(bannedWords).slice(0, 25),
+    writingInstructions: `Strict Voice Directives: ${sentenceStyle} Absolutely avoid: ${Array.from(bannedWords).slice(0, 8).join(', ')}. Use natural phrasing like: ${Array.from(vocabulary).slice(0, 6).join(', ')}.`,
+    interviewAnswers: currentProfile?.interviewAnswers || [],
+    updatedAt: new Date().toISOString(),
+    adaptationNotes: updatedNotes,
+    corpusArticleCount: pairs.length,
+  };
+
+  return {
+    profile: updatedProfile,
+    adaptationSummary: summary,
+  };
+}
+
+/**
+ * Re-voice and de-slop an article draft locally by purging AI tropes,
+ * trimming corporate padding, and enforcing human cadence.
+ */
+export function revoiceArticleLocally(
+  article: MediumArticle,
+  profile?: VoiceProfile | null,
+): { title: string; subtitle: string; contentMarkdown: string; revisionSummary: string } {
+  let content = article.contentMarkdown || '';
+  let title = article.title || '';
+  let subtitle = article.subtitle || '';
+
+  // 1. Purge standard AI clichés & filler
+  const cliches = [
+    /\bIn today['’]s (?:fast-paced|rapidly changing|digital) world,?\s*/gi,
+    /\bIt is (?:crucial|essential|paramount|worth noting) (?:that|to remember that)\s*/gi,
+    /\b(?:Furthermore|Moreover|In addition),\s*/gi,
+    /\bIn conclusion,?\s*/gi,
+    /\bdelve into\b/gi,
+    /\ba testament to\b/gi,
+    /\ba tapestry of\b/gi,
+    /\bgame-changer\b/gi,
+    /\bleverage\b/gi,
+    /\brevolutionize\b/gi,
+    /\bpivotal\b/gi,
+    /\bbeacon of\b/gi,
+  ];
+
+  for (const regex of cliches) {
+    content = content.replace(regex, (match) => {
+      if (/delve into/i.test(match)) return 'examine';
+      if (/testament to/i.test(match)) return 'proof of';
+      if (/game-changer/i.test(match)) return 'major shift';
+      if (/leverage/i.test(match)) return 'use';
+      return '';
+    });
+  }
+
+  // 2. Remove user-banned words from profile if provided
+  if (profile?.bannedWordsAndPhrases) {
+    for (const banned of profile.bannedWordsAndPhrases) {
+      if (!banned.trim()) continue;
+      const bRegex = new RegExp(`\\b${banned.trim()}\\b`, 'gi');
+      content = content.replace(bRegex, '');
+    }
+  }
+
+  // Clean double spaces or broken punctuation
+  content = content.replace(/\s{2,}/g, ' ').replace(/\s+([.,!?;:])/g, '$1');
+
+  // De-slop title if it has buzzwords
+  title = title
+    .replace(/\bHow to Delve into\b/gi, 'How to Master')
+    .replace(/\bA Comprehensive Guide to\b/gi, 'A Honest Guide to')
+    .replace(/\bGame-Changing\b/gi, 'Effective')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  subtitle = subtitle
+    .replace(/\bIn today's fast-paced world,?\s*/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  return {
+    title,
+    subtitle,
+    contentMarkdown: content.trim(),
+    revisionSummary: 'De-slopped draft: pruned generic AI clichés, removed filler, and applied authentic voice cadence.',
+  };
+}
+
+export const BUILTIN_VOICE_DILEMMAS: VoiceDilemma[] = [
+  {
+    id: 'dilemma-opening-hook',
+    category: 'opening',
+    scenario: 'Opening your story: Hooking the reader into the central problem',
+    optionA: 'In today’s fast-moving environment, many organizations struggle with prioritizing what truly moves the needle.',
+    optionB: 'Most teams waste 80% of their time on things that don’t matter. Here is how we stopped doing that.',
+    labelA: 'Formal / Conventional',
+    labelB: 'Punchy & Candid',
+  },
+  {
+    id: 'dilemma-hard-truth',
+    category: 'opinion',
+    scenario: 'Introducing a contrarian insight or uncomfortable truth',
+    optionA: 'While conventional wisdom advocates for broad consensus, iterative paradigms often benefit from centralized decision-making.',
+    optionB: 'Committees kill great ideas. If you need 10 people to approve a decision, you’re just hiding from accountability.',
+    labelA: 'Diplomatic / Corporate',
+    labelB: 'Direct & Bold',
+  },
+  {
+    id: 'dilemma-transition',
+    category: 'transition',
+    scenario: 'Transitioning between two major points in your article',
+    optionA: 'Furthermore, it is worth examining the second critical pillar that underscores this phenomenon.',
+    optionB: 'That brings us to the real problem:',
+    labelA: 'Textbook Academic',
+    labelB: 'Conversational Staccato',
+  },
+  {
+    id: 'dilemma-failure',
+    category: 'humor',
+    scenario: 'Describing an unexpected mistake or engineering bug',
+    optionA: 'We observed an unfortunate degradation in system throughput due to unforeseen edge cases.',
+    optionB: 'We completely broke production on a Friday afternoon. It was messy, embarrassing, and totally our fault.',
+    labelA: 'Sanitized Report',
+    labelB: 'Self-Deprecating & Human',
+  },
+  {
+    id: 'dilemma-conclusion',
+    category: 'conclusion',
+    scenario: 'Wrapping up the story with a call-to-action',
+    optionA: 'In conclusion, by taking a holistic approach and leveraging these strategic frameworks, you can empower your future growth.',
+    optionB: 'Don’t overcomplicate this. Pick the one bottleneck keeping you up at night, delete the rest of your to-do list, and fix it today.',
+    labelA: 'Consultant Wrap-up',
+    labelB: 'Clear Action Directive',
+  },
+];
+
+/**
+ * Generate a set of Voice Dilemmas for calibration.
+ */
+export function generateDilemmasLocally(
+  article?: MediumArticle | null,
+  _profile?: VoiceProfile | null,
+): VoiceDilemma[] {
+  if (!article || !article.title) {
+    return BUILTIN_VOICE_DILEMMAS;
+  }
+
+  // Tailor scenarios slightly to the current article title
+  return [
+    {
+      id: `dilemma-hook-${Date.now()}`,
+      category: 'opening',
+      scenario: `Opening Hook: How would you start an article on "${article.title.slice(0, 50)}"?`,
+      optionA: `Many professionals find themselves pondering the complexities of this subject in today's fast-paced environment.`,
+      optionB: `Let's cut the noise: most people approach this completely backwards.`,
+      labelA: 'Polite / Theoretical',
+      labelB: 'Direct / Provocative',
+    },
+    ...BUILTIN_VOICE_DILEMMAS.slice(1),
+  ];
+}
+
+/**
+ * Update a Voice Profile based on a user's dilemma choice.
+ */
+export function submitDilemmaLocally(
+  dilemma: VoiceDilemma,
+  choice: 'A' | 'B' | 'custom',
+  customText?: string,
+  profile?: VoiceProfile | null,
+): { profile: VoiceProfile; feedback: string } {
+  const current = profile || {
+    name: 'My Voice',
+    summary: 'Voice profile in training.',
+    traits: [],
+    sentenceStyle: 'Balanced',
+    vocabulary: [],
+    signatureMoves: [],
+    avoidances: [],
+    writingInstructions: '',
+    interviewAnswers: [],
+    updatedAt: new Date().toISOString(),
+    dilemmasAnsweredCount: 0,
+  };
+
+  const traits = new Set<string>(current.traits);
+  const signatureMoves = new Set<string>(current.signatureMoves);
+  const avoidances = new Set<string>(current.avoidances);
+  const vocabulary = new Set<string>(current.vocabulary);
+  let feedback = '';
+
+  if (choice === 'B') {
+    traits.add('Direct');
+    traits.add('Punchy');
+    signatureMoves.add(`Prefers candid phrasing like "${dilemma.optionB.slice(0, 45)}..."`);
+    avoidances.add(`Avoids generic phrasing like "${dilemma.optionA.slice(0, 45)}..."`);
+    feedback = 'Tuned for direct, punchy, and conversational cadence.';
+  } else if (choice === 'A') {
+    traits.add('Thoughtful');
+    traits.add('Measured');
+    signatureMoves.add(`Prefers measured phrasing like "${dilemma.optionA.slice(0, 45)}..."`);
+    feedback = 'Tuned for measured and structured tone.';
+  } else if (choice === 'custom' && customText && customText.trim()) {
+    traits.add('Distinctive');
+    const snippet = customText.trim().slice(0, 60);
+    signatureMoves.add(`Author signature phrasing: "${snippet}"`);
+    const words = customText.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/).filter((w) => w.length > 4 && !STOP_WORDS.has(w));
+    words.slice(0, 4).forEach((w) => vocabulary.add(w));
+    feedback = `Adopted your exact signature words: "${snippet}"`;
+  }
+
+  const count = (current.dilemmasAnsweredCount || 0) + 1;
+  const updatedNotes = [
+    ...(current.adaptationNotes || []),
+    `${new Date().toLocaleDateString()}: Calibrated via question on ${dilemma.category} (${feedback})`,
+  ].slice(-10);
+
+  const updatedProfile: VoiceProfile = {
+    ...current,
+    traits: Array.from(traits).slice(0, 12),
+    signatureMoves: Array.from(signatureMoves).slice(0, 10),
+    avoidances: Array.from(avoidances).slice(0, 10),
+    vocabulary: Array.from(vocabulary).slice(0, 25),
+    updatedAt: new Date().toISOString(),
+    adaptationNotes: updatedNotes,
+    dilemmasAnsweredCount: count,
+  };
+
+  return {
+    profile: updatedProfile,
+    feedback,
   };
 }

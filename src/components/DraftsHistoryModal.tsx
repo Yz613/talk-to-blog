@@ -123,6 +123,14 @@ export default function DraftsHistoryModal({
                     <span className="text-indigo-400 font-semibold">
                       SEO: {draft.seo.seoScore}/100
                     </span>
+                    {draft.isPublished && (
+                      <>
+                        <span>•</span>
+                        <span className="text-emerald-400 font-semibold">
+                          ✓ Published
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
 

@@ -328,11 +328,7 @@ export default function App() {
         const syncedArticle: MediumArticle = {
           ...targetArticle,
           lastVoiceSyncAt: new Date().toISOString(),
-          initialAiDraft: {
-            title: targetArticle.title,
-            subtitle: targetArticle.subtitle,
-            contentMarkdown: targetArticle.contentMarkdown,
-          },
+          initialAiDraft: baseline, // Preserve original initial draft baseline for corpus analysis
         };
         selectArticle(syncedArticle);
         const updatedList = drafts.map((d) => (d.id === syncedArticle.id ? syncedArticle : d));
@@ -343,6 +339,144 @@ export default function App() {
       console.warn('Could not adapt voice from edits:', err);
     } finally {
       setIsSyncingVoice(false);
+    }
+  };
+
+  // Toggle published status for an article and preserve published snapshot
+  const handleTogglePublished = (overrideArticle?: MediumArticle) => {
+    const targetArticle = overrideArticle || currentArticle;
+    if (!targetArticle) return;
+
+    const nextPublished = !targetArticle.isPublished;
+    const publishedSnapshot = nextPublished
+      ? {
+          title: targetArticle.title,
+          subtitle: targetArticle.subtitle,
+          contentMarkdown: targetArticle.contentMarkdown,
+        }
+      : undefined;
+
+    const updated: MediumArticle = {
+      ...targetArticle,
+      isPublished: nextPublished,
+      publishedAt: nextPublished ? (targetArticle.publishedAt || new Date().toISOString()) : undefined,
+      publishedSnapshot,
+    };
+
+    selectArticle(updated);
+    const updatedList = drafts.map((d) => (d.id === updated.id ? updated : d));
+    saveDraftsToStorage(updatedList);
+
+    if (nextPublished) {
+      showStatus('Marked as Published! Story added to your published voice corpus.', false, 4000);
+    } else {
+      showStatus('Story marked as draft.', false, 2500);
+    }
+  };
+
+  // Sync voice from all published stories compared against their initial AI drafts
+  const handleSyncVoiceFromCorpus = async () => {
+    const eligibleArticles = drafts.filter((d) => {
+      if (!d.initialAiDraft) return false;
+      if (d.isPublished) return true;
+      const isEdited =
+        d.title.trim() !== d.initialAiDraft.title.trim() ||
+        d.contentMarkdown.trim() !== d.initialAiDraft.contentMarkdown.trim();
+      return isEdited;
+    });
+
+    if (eligibleArticles.length === 0) {
+      showStatus('No stories with edits or published versions found to analyze yet.', true, 4000);
+      return;
+    }
+
+    const pairs = eligibleArticles.map((d) => ({
+      title: d.title,
+      original: d.initialAiDraft!,
+      published: d.publishedSnapshot || {
+        title: d.title,
+        subtitle: d.subtitle,
+        contentMarkdown: d.contentMarkdown,
+      },
+    }));
+
+    setIsSyncingVoice(true);
+    try {
+      const response = await fetch('/api/adapt-voice-from-corpus', {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({
+          pairs,
+          currentProfile: voiceProfile,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error || 'Failed to calibrate voice from published corpus.');
+      }
+
+      const data = (await response.json()) as { profile: VoiceProfile; adaptationSummary?: string };
+      if (data.profile) {
+        handleSaveVoiceProfile(data.profile);
+        showStatus(
+          data.adaptationSummary || `Voice calibrated across ${pairs.length} published stories!`,
+          false,
+          5000,
+        );
+      }
+    } catch (err: any) {
+      console.error('Failed to sync corpus voice:', err);
+      showStatus(`Could not calibrate from published archive: ${err.message}`, true, 6000);
+    } finally {
+      setIsSyncingVoice(false);
+    }
+  };
+
+  // Re-voice the current draft in the editor: strips AI slop, purges random keywords, applies calibrated voice
+  const handleRevoiceArticle = async (customInstructions?: string) => {
+    if (!currentArticle) return;
+    setIsRefining(true);
+
+    try {
+      const response = await fetch('/api/revoice-article', {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({
+          article: currentArticle,
+          voiceProfile,
+          customInstructions,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error || 'Failed to re-voice article.');
+      }
+
+      const data = (await response.json()) as {
+        title: string;
+        subtitle: string;
+        contentMarkdown: string;
+        revisionSummary?: string;
+      };
+
+      const updatedArticle: MediumArticle = {
+        ...currentArticle,
+        title: data.title || currentArticle.title,
+        subtitle: data.subtitle || currentArticle.subtitle,
+        contentMarkdown: data.contentMarkdown || currentArticle.contentMarkdown,
+      };
+
+      selectArticle(updatedArticle);
+      const updatedList = drafts.map((d) => (d.id === updatedArticle.id ? updatedArticle : d));
+      saveDraftsToStorage(updatedList);
+      showStatus(data.revisionSummary || 'Re-voiced draft in your authentic style!', false, 4000);
+    } catch (err: any) {
+      console.error('Error re-voicing article:', err);
+      showStatus(`Could not re-voice draft: ${err.message}`, true, 6000);
+    } finally {
+      setIsRefining(false);
     }
   };
 
@@ -698,6 +832,12 @@ export default function App() {
               onUpdateArticle={handleUpdateArticle}
               onRefineSection={handleRefine}
               onSyncVoiceFromEdits={() => handleSyncVoiceFromEdits()}
+              onTogglePublished={() => handleTogglePublished()}
+              onSyncVoiceFromCorpus={handleSyncVoiceFromCorpus}
+              onRevoiceArticle={handleRevoiceArticle}
+              onSaveVoiceProfile={handleSaveVoiceProfile}
+              publishedStoriesCount={drafts.filter((d) => d.isPublished || (d.initialAiDraft && d.title !== d.initialAiDraft.title)).length}
+              apiKey={apiKey}
               isRefining={isRefining}
               canResearch={Boolean(serviceStatus?.aiConfigured)}
               isSyncingVoice={isSyncingVoice}
