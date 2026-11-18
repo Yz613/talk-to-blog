@@ -16,7 +16,27 @@ import {
   Download,
   RefreshCw,
 } from 'lucide-react';
-import { ArticleLength, ArticleTone, GenerationOptions } from '../types';
+import { ArticleLength, ArticleTone, GenerationOptions, WordReplacement } from '../types';
+import { cleanSpeechLocally } from '../utils/speechPolisher';
+import { formatWithPersonalDictionary } from '../utils/dictionary';
+
+function getSavedVocabulary(): string[] {
+  try {
+    const saved = localStorage.getItem('voxscribe_custom_vocabulary_v1');
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+}
+
+function getSavedReplacements(): WordReplacement[] {
+  try {
+    const saved = localStorage.getItem('voxscribe_word_replacements_v1');
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+}
 
 interface VoiceStudioProps {
   onGenerate: (transcript: string, options: GenerationOptions) => void;
@@ -344,6 +364,8 @@ export default function VoiceStudio({
               body: JSON.stringify({
                 audioData: base64Audio,
                 mimeType: 'audio/webm',
+                customVocabulary: getSavedVocabulary(),
+                wordReplacements: getSavedReplacements(),
               }),
             });
             const data = await res.json() as { transcript?: string; error?: string };
@@ -404,6 +426,8 @@ export default function VoiceStudio({
           body: JSON.stringify({
             audioData: base64,
             mimeType: file.type || 'audio/mp3',
+            customVocabulary: getSavedVocabulary(),
+            wordReplacements: getSavedReplacements(),
           }),
         });
         const data = await res.json() as { transcript?: string; error?: string };
@@ -443,6 +467,14 @@ export default function VoiceStudio({
       targetAudience,
       readingLength,
       customInstructions,
+    });
+  };
+
+  const handlePolishTranscript = () => {
+    setTranscript((prev) => {
+      if (!prev.trim()) return prev;
+      const cleaned = cleanSpeechLocally(prev);
+      return formatWithPersonalDictionary(cleaned, getSavedReplacements(), getSavedVocabulary());
     });
   };
 
@@ -496,6 +528,21 @@ export default function VoiceStudio({
               <Upload className="w-3.5 h-3.5" />
               Upload Audio Note
             </button>
+
+            {/* Polish Speech Button */}
+            {transcript && (
+              <button
+                type="button"
+                id="polish-speech-btn"
+                onClick={handlePolishTranscript}
+                disabled={isRecording}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 rounded-full transition-colors cursor-pointer"
+                title="Remove filler words (um, uh, you know), clean stutters, and auto-format spoken lists"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                Polish Speech
+              </button>
+            )}
 
             {/* Clear Button */}
             {transcript && (

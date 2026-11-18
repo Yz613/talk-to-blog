@@ -14,6 +14,7 @@ import {
   ChevronRight,
   TrendingUp,
   UserRound,
+  BookA,
 } from 'lucide-react';
 import { MediumArticle, GenerationOptions, ArticleSeo, VoiceProfile, ArticleResearch } from './types';
 import VoiceStudio from './components/VoiceStudio';
@@ -22,6 +23,7 @@ import SeoDashboard from './components/SeoDashboard';
 import DraftsHistoryModal from './components/DraftsHistoryModal';
 import VoiceProfileModal from './components/VoiceProfileModal';
 import SentenceCalibratorModal from './components/SentenceCalibratorModal';
+import VocabularyModal from './components/VocabularyModal';
 
 const STORAGE_KEY = 'voice_to_medium_drafts_v1';
 const MAX_SAVED_DRAFTS = 50;
@@ -76,6 +78,7 @@ export default function App() {
   const [storySession, setStorySession] = useState(0);
   const [isVoiceProfileOpen, setIsVoiceProfileOpen] = useState(false);
   const [isSentenceCalibratorOpen, setIsSentenceCalibratorOpen] = useState(false);
+  const [isVocabularyOpen, setIsVocabularyOpen] = useState(false);
   const syncVoiceDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [apiKey, setApiKey] = useState(() => {
     try {
@@ -674,6 +677,15 @@ export default function App() {
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={() => setIsVocabularyOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 transition-colors cursor-pointer"
+              title="Manage custom vocabulary & word replacements"
+            >
+              <BookA className="w-3.5 h-3.5 text-blue-400" />
+              <span className="hidden sm:inline">Dictionary</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setIsSentenceCalibratorOpen(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 transition-colors cursor-pointer"
               title="Calibrate voice 3 sentences at a time with keyboard rewriting"
@@ -908,7 +920,15 @@ export default function App() {
         voiceProfile={voiceProfile}
         onSaveVoiceProfile={handleSaveVoiceProfile}
         onApplyRewritesToArticle={(content) => handleUpdateArticle({ contentMarkdown: content })}
+        onOpenDictionary={() => setIsVocabularyOpen(true)}
         apiKey={apiKey}
+      />
+
+      <VocabularyModal
+        isOpen={isVocabularyOpen}
+        onClose={() => setIsVocabularyOpen(false)}
+        voiceProfile={voiceProfile}
+        onSaveVoiceProfile={handleSaveVoiceProfile}
       />
     </div>
   );

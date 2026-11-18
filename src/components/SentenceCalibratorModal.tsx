@@ -15,8 +15,13 @@ import {
   Wand2,
   Database,
   Sliders,
+  BookOpen,
+  Plus,
+  Trash2,
+  Tag,
+  BookA,
 } from 'lucide-react';
-import { MediumArticle, VoiceProfile, VoiceRewritePair } from '../types';
+import { MediumArticle, VoiceProfile, VoiceRewritePair, PublishedWriting } from '../types';
 import { chunkTextBySentences, computeWordDiff, TextChunk } from '../utils/sentenceChunker';
 
 interface SentenceCalibratorModalProps {
@@ -27,10 +32,12 @@ interface SentenceCalibratorModalProps {
   voiceProfile?: VoiceProfile | null;
   onSaveVoiceProfile?: (profile: VoiceProfile) => void;
   onApplyRewritesToArticle?: (newContentMarkdown: string) => void;
+  onOpenDictionary?: () => void;
   apiKey?: string;
 }
 
 const REWRITES_STORAGE_KEY = 'voxscribe_voice_rewrites_v1';
+const EXTERNAL_CORPUS_STORAGE_KEY = 'voxscribe_external_corpus_v1';
 
 export default function SentenceCalibratorModal({
   isOpen,
@@ -40,8 +47,12 @@ export default function SentenceCalibratorModal({
   voiceProfile,
   onSaveVoiceProfile,
   onApplyRewritesToArticle,
+  onOpenDictionary,
   apiKey,
 }: SentenceCalibratorModalProps) {
+  // Navigation tabs
+  const [activeTab, setActiveTab] = useState<'trainer' | 'corpus' | 'rewrites'>('trainer');
+
   // Source Selection
   const [sourceMode, setSourceMode] = useState<'current' | 'drafts' | 'custom'>('current');
   const [selectedDraftId, setSelectedDraftId] = useState<string>(currentArticle?.id || '');
@@ -69,6 +80,23 @@ export default function SentenceCalibratorModal({
       return [];
     }
   });
+
+  // External Published Corpus
+  const [externalCorpus, setExternalCorpus] = useState<PublishedWriting[]>(() => {
+    try {
+      const saved = localStorage.getItem(EXTERNAL_CORPUS_STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+      return voiceProfile?.externalCorpus || [];
+    } catch {
+      return voiceProfile?.externalCorpus || [];
+    }
+  });
+
+  // Add Article Form State
+  const [isAddingArticle, setIsAddingArticle] = useState<boolean>(false);
+  const [newTitle, setNewTitle] = useState<string>('');
+  const [newCategory, setNewCategory] = useState<'article' | 'post' | 'newsletter' | 'other'>('article');
+  const [newContent, setNewContent] = useState<string>('');
 
   // Load chunks when modal opens or source changes
   useEffect(() => {
@@ -122,6 +150,25 @@ export default function SentenceCalibratorModal({
     setUserRewrite(draftText);
   };
 
+  // Build combined published pairs (in-app + external)
+  const getCombinedPublishedPairs = () => {
+    const inAppPairs = drafts
+      .filter((d) => d.isPublished && d.initialAiDraft && d.publishedSnapshot)
+      .map((d) => ({
+        original: d.initialAiDraft!,
+        published: d.publishedSnapshot!,
+        title: d.title,
+      }));
+
+    const externalPairs = externalCorpus.map((item) => ({
+      original: { title: item.title, subtitle: '', contentMarkdown: item.content },
+      published: { title: item.title, subtitle: '', contentMarkdown: item.content },
+      title: item.title,
+    }));
+
+    return [...inAppPairs, ...externalPairs];
+  };
+
   // Save current chunk rewrite
   const handleSaveChunk = async () => {
     if (!spokenChunks[currentChunkIndex] || !userRewrite.trim()) return;
@@ -147,14 +194,7 @@ export default function SentenceCalibratorModal({
       localStorage.setItem(REWRITES_STORAGE_KEY, JSON.stringify(updatedRewrites));
     } catch {}
 
-    // Published stories pairs for corpus grounding
-    const publishedPairs = drafts
-      .filter((d) => d.isPublished && d.initialAiDraft && d.publishedSnapshot)
-      .map((d) => ({
-        original: d.initialAiDraft!,
-        published: d.publishedSnapshot!,
-        title: d.title,
-      }));
+    const publishedPairs = getCombinedPublishedPairs();
 
     try {
       const response = await fetch('/api/adapt-voice-from-rewrites', {
@@ -182,7 +222,6 @@ export default function SentenceCalibratorModal({
     } finally {
       setIsSubmitting(false);
 
-      // Advance to next chunk if available
       if (currentChunkIndex + 1 < spokenChunks.length) {
         handleSelectChunk(currentChunkIndex + 1);
       }
@@ -198,23 +237,78 @@ export default function SentenceCalibratorModal({
       return;
     }
 
-    // Sort by chunk index
     const sorted = [...articleRewrites].sort((a, b) => (a.chunkIndex || 0) - (b.chunkIndex || 0));
     const combinedRewrites = sorted.map((s) => s.userRewriteChunk).join('\n\n');
     onApplyRewritesToArticle(combinedRewrites);
     setFeedback('Applied your exact rewrites directly to the story draft!');
   };
 
+  // Add external published writing
+  const handleAddExternalArticle = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!newTitle.trim() || !newContent.trim()) return;
+
+    const newArticle: PublishedWriting = {
+      id: `pub_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      title: newTitle.trim(),
+      category: newCategory,
+      content: newContent.trim(),
+      wordCount: newContent.trim().split(/\s+/).length,
+    };
+
+    const updated = [newArticle, ...externalCorpus];
+    setExternalCorpus(updated);
+    try {
+      localStorage.setItem(EXTERNAL_CORPUS_STORAGE_KEY, JSON.stringify(updated));
+    } catch {}
+
+    if (voiceProfile && onSaveVoiceProfile) {
+      onSaveVoiceProfile({
+        ...voiceProfile,
+        externalCorpus: updated,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    setNewTitle('');
+    setNewContent('');
+    setIsAddingArticle(false);
+  };
+
+  const handleDeleteExternalArticle = (id: string) => {
+    const updated = externalCorpus.filter((a) => a.id !== id);
+    setExternalCorpus(updated);
+    try {
+      localStorage.setItem(EXTERNAL_CORPUS_STORAGE_KEY, JSON.stringify(updated));
+    } catch {}
+    if (voiceProfile && onSaveVoiceProfile) {
+      onSaveVoiceProfile({
+        ...voiceProfile,
+        externalCorpus: updated,
+      });
+    }
+  };
+
+  const handleDeleteRewrite = (id: string) => {
+    const updated = savedRewrites.filter((r) => r.id !== id);
+    setSavedRewrites(updated);
+    try {
+      localStorage.setItem(REWRITES_STORAGE_KEY, JSON.stringify(updated));
+    } catch {}
+  };
+
   if (!isOpen) return null;
 
   const activeSpoken = spokenChunks[currentChunkIndex];
-  const publishedStoriesCount = drafts.filter((d) => d.isPublished).length;
+  const inAppPublishedCount = drafts.filter((d) => d.isPublished).length;
+  const totalCorpusCount = inAppPublishedCount + externalCorpus.length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md animate-fade-in">
-      <div className="bg-[#0D0D11] border border-indigo-500/30 rounded-3xl w-full max-w-4xl max-h-[92vh] overflow-y-auto shadow-2xl flex flex-col text-white">
+      <div className="bg-[#0D0D11] border border-indigo-500/30 rounded-3xl w-full max-w-4xl max-h-[92vh] overflow-hidden shadow-2xl flex flex-col text-white">
         {/* Header */}
-        <div className="p-5 sm:p-6 border-b border-white/10 flex items-start justify-between gap-4 sticky top-0 bg-[#0D0D11]/95 backdrop-blur-md z-10">
+        <div className="p-5 sm:p-6 border-b border-white/10 flex items-start justify-between gap-4 bg-[#0D0D11]/95 backdrop-blur-md">
           <div className="space-y-1">
             <div className="flex items-center gap-2.5">
               <span className="p-2 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30">
@@ -225,345 +319,541 @@ export default function SentenceCalibratorModal({
               </h2>
             </div>
             <p className="text-xs text-white/60 leading-relaxed max-w-2xl">
-              Look at what you said in your voice note, see how the AI drafted it, then rewrite it with your keyboard (no mic!). By comparing your exact typing to raw speech, the AI learns your true cadence, sentence lengths, and vocabulary.
+              Compare speech to AI drafts, rewrite with your keyboard, and continuously ground in your published writing archive.
             </p>
           </div>
 
+          <div className="flex items-center gap-2">
+            {onOpenDictionary && (
+              <button
+                type="button"
+                onClick={onOpenDictionary}
+                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 transition-colors cursor-pointer"
+                title="Manage custom vocabulary & word replacements"
+              >
+                <BookA size={14} />
+                Dictionary
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-2 text-white/40 hover:text-white rounded-full hover:bg-white/5 transition-colors cursor-pointer"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* Navigation Tabs */}
+        <div className="flex items-center gap-2 px-6 pt-3 border-b border-white/10 bg-[#0A0A0C]">
           <button
-            onClick={onClose}
-            className="p-2 text-white/40 hover:text-white rounded-full hover:bg-white/5 transition-colors"
+            type="button"
+            onClick={() => setActiveTab('trainer')}
+            className={`px-4 py-2 rounded-t-xl text-xs font-semibold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${
+              activeTab === 'trainer'
+                ? 'border-indigo-500 text-white bg-indigo-500/10'
+                : 'border-transparent text-white/50 hover:text-white'
+            }`}
           >
-            <X size={18} />
+            <PenTool size={14} className="text-indigo-400" />
+            3-Sentence Calibrator
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('corpus')}
+            className={`px-4 py-2 rounded-t-xl text-xs font-semibold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${
+              activeTab === 'corpus'
+                ? 'border-emerald-500 text-white bg-emerald-500/10'
+                : 'border-transparent text-white/50 hover:text-white'
+            }`}
+          >
+            <BookOpen size={14} className="text-emerald-400" />
+            Published Writing Corpus ({totalCorpusCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('rewrites')}
+            className={`px-4 py-2 rounded-t-xl text-xs font-semibold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${
+              activeTab === 'rewrites'
+                ? 'border-amber-500 text-white bg-amber-500/10'
+                : 'border-transparent text-white/50 hover:text-white'
+            }`}
+          >
+            <FileText size={14} className="text-amber-400" />
+            Saved Rewrites ({savedRewrites.length})
           </button>
         </div>
 
-        {/* Source & Pacing Controls */}
-        <div className="p-4 sm:p-6 space-y-4">
-          <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            {/* Source Mode */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-white/60 flex items-center gap-1.5">
-                <Sliders size={13} className="text-indigo-400" /> Source:
-              </span>
-              <div className="flex items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/10">
-                {currentArticle && (
-                  <button
-                    onClick={() => setSourceMode('current')}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
-                      sourceMode === 'current'
-                        ? 'bg-indigo-600 text-white'
-                        : 'text-white/60 hover:text-white'
-                    }`}
-                  >
-                    Current Story
-                  </button>
-                )}
-                {drafts.length > 0 && (
-                  <button
-                    onClick={() => setSourceMode('drafts')}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
-                      sourceMode === 'drafts'
-                        ? 'bg-indigo-600 text-white'
-                        : 'text-white/60 hover:text-white'
-                    }`}
-                  >
-                    Past Stories ({drafts.length})
-                  </button>
-                )}
-                <button
-                  onClick={() => setSourceMode('custom')}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
-                    sourceMode === 'custom'
-                      ? 'bg-indigo-600 text-white'
-                      : 'text-white/60 hover:text-white'
-                  }`}
-                >
-                  Custom Notes
-                </button>
-              </div>
-            </div>
-
-            {/* Pacing Selector */}
-            <div className="flex items-center gap-2 text-xs text-white/60">
-              <span>Pacing:</span>
-              <select
-                value={chunkSize}
-                onChange={(e) => setChunkSize(Number(e.target.value))}
-                className="bg-black/40 border border-white/15 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
-              >
-                <option value={1}>1 sentence at a time</option>
-                <option value={2}>2 sentences at a time</option>
-                <option value={3}>3 sentences at a time (Recommended)</option>
-                <option value={5}>5 sentences at a time</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Past Draft Picker or Custom Text Input */}
-          {sourceMode === 'drafts' && drafts.length > 0 && (
-            <div className="flex items-center gap-3">
-              <select
-                value={selectedDraftId}
-                onChange={(e) => setSelectedDraftId(e.target.value)}
-                className="flex-1 bg-black/40 border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
-              >
-                {drafts.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.title} ({d.wordCount} words) — {new Date(d.createdAt).toLocaleDateString()}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {sourceMode === 'custom' && (
-            <div className="space-y-2">
-              <textarea
-                rows={3}
-                value={customSpokenText}
-                onChange={(e) => setCustomSpokenText(e.target.value)}
-                placeholder="Paste spoken voice transcript or audio notes to chunk..."
-                className="w-full bg-black/40 border border-white/15 rounded-xl p-3 text-xs text-white placeholder-white/40 focus:outline-none focus:border-indigo-500 leading-relaxed"
-              />
-            </div>
-          )}
-
-          {/* Stepper Progress Bar */}
-          {spokenChunks.length > 0 && (
-            <div className="p-3 rounded-2xl bg-white/[0.02] border border-white/10 flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => handleSelectChunk(currentChunkIndex - 1)}
-                  disabled={currentChunkIndex === 0}
-                  className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 disabled:opacity-30 text-white transition-colors cursor-pointer"
-                  title="Previous Chunk"
-                >
-                  <ArrowLeft size={14} />
-                </button>
-
+        {/* Scrollable Tab Body */}
+        <div className="flex-1 overflow-y-auto">
+          {/* TAB 1: 3-SENTENCE TRAINER */}
+          {activeTab === 'trainer' && (
+            <div className="p-4 sm:p-6 space-y-4">
+              {/* Source & Pacing Controls */}
+              <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-white">
-                    Chunk {currentChunkIndex + 1} of {spokenChunks.length}
+                  <span className="text-xs font-semibold text-white/60 flex items-center gap-1.5">
+                    <Sliders size={13} className="text-indigo-400" /> Source:
                   </span>
-                  <span className="text-[11px] text-white/40">
-                    ({activeSpoken?.sentences?.length || 0} sentences)
-                  </span>
-                </div>
-
-                <button
-                  onClick={() => handleSelectChunk(currentChunkIndex + 1)}
-                  disabled={currentChunkIndex >= spokenChunks.length - 1}
-                  className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 disabled:opacity-30 text-white transition-colors cursor-pointer"
-                  title="Next Chunk"
-                >
-                  <ArrowRight size={14} />
-                </button>
-              </div>
-
-              {/* Progress dots */}
-              <div className="flex items-center gap-1.5 overflow-x-auto py-1">
-                {spokenChunks.map((_, i) => (
-                  <button
-                    key={i}
-                    onClick={() => handleSelectChunk(i)}
-                    className={`h-2 rounded-full transition-all cursor-pointer ${
-                      i === currentChunkIndex
-                        ? 'w-6 bg-indigo-500'
-                        : 'w-2 bg-white/20 hover:bg-white/40'
-                    }`}
-                    title={`Jump to Chunk ${i + 1}`}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 3-Step Comparison Cards */}
-          {activeSpoken ? (
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* 1. What You Said (Spoken Input) */}
-                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex flex-col justify-between space-y-3">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs pb-1 border-b border-white/10">
-                      <span className="font-semibold text-white/80 flex items-center gap-1.5">
-                        <Mic size={13} className="text-amber-400" />
-                        1. What You Said (Spoken Note)
-                      </span>
-                      <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 text-[10px] font-mono">
-                        Raw Transcript
-                      </span>
-                    </div>
-
-                    <div className="text-xs text-white/80 leading-relaxed font-mono bg-black/40 p-3 rounded-xl border border-white/5 min-h-[90px] select-text">
-                      {activeSpoken.rawSpoken}
-                    </div>
-                  </div>
-
-                  <div className="text-[11px] text-white/40">
-                    Exact spoken words transcribed from your voice memo.
-                  </div>
-                </div>
-
-                {/* 2. How AI Wrote It */}
-                <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 flex flex-col justify-between space-y-3">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs pb-1 border-b border-white/10">
-                      <span className="font-semibold text-white/80 flex items-center gap-1.5">
-                        <Wand2 size={13} className="text-purple-400" />
-                        2. How AI Wrote It
-                      </span>
-                      <span className="px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 text-[10px] font-mono">
-                        AI Draft
-                      </span>
-                    </div>
-
-                    <div className="text-xs text-white/90 leading-relaxed bg-black/40 p-3 rounded-xl border border-white/5 min-h-[90px] select-text">
-                      {aiDraft || activeSpoken.rawSpoken}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-[11px] text-white/40">
-                      AI's proposal based on your draft.
-                    </span>
-                    <button
-                      onClick={() => setUserRewrite(aiDraft)}
-                      className="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition-colors font-medium cursor-pointer"
-                    >
-                      <Copy size={11} />
-                      Copy to My Rewrite
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* 3. Your Exact Rewrite (Keyboard Only!) */}
-              <div className="p-5 rounded-2xl bg-[#111118] border-2 border-indigo-500/40 shadow-xl space-y-3">
-                <div className="flex items-center justify-between text-xs pb-2 border-b border-white/10">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-white flex items-center gap-1.5">
-                      <PenTool size={14} className="text-emerald-400" />
-                      3. Your Exact Rewrite (Type with Keyboard)
-                    </span>
-                    <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-semibold">
-                      Keyboard Only
-                    </span>
-                  </div>
-
-                  {/* Diff View Toggle */}
-                  <button
-                    onClick={() => setShowDiff(!showDiff)}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-colors cursor-pointer ${
-                      showDiff
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-white/10 text-white/70 hover:bg-white/15'
-                    }`}
-                  >
-                    <Eye size={12} />
-                    {showDiff ? 'Back to Editor' : 'Compare Diff'}
-                  </button>
-                </div>
-
-                {/* Important Reminder Banner */}
-                <div className="p-2.5 rounded-xl bg-indigo-950/40 border border-indigo-800/40 text-[11px] text-indigo-200 flex items-start gap-2">
-                  <AlertCircle size={14} className="shrink-0 mt-0.5 text-indigo-400" />
-                  <span>
-                    <strong>Do not speak to it</strong> — rewrite this chunk exactly as you want it to appear in your finished blog post. Type your exact sentence breaks, em-dashes (`—`), and word choice. VoxScribe pairs your typing with the raw voice transcript to align future articles with your authentic voice.
-                  </span>
-                </div>
-
-                {/* Editor or Diff */}
-                {showDiff ? (
-                  <div className="p-3.5 rounded-xl bg-black/60 border border-white/10 min-h-[100px] text-xs leading-relaxed">
-                    <div className="text-[11px] text-white/40 mb-2 font-mono">
-                      Diff: <span className="text-rose-400 line-through">removed from draft</span> |{' '}
-                      <span className="text-emerald-400 font-semibold underline">added in your rewrite</span>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {computeWordDiff(aiDraft, userRewrite).map((t, i) => {
-                        if (t.type === 'removed') {
-                          return (
-                            <span key={i} className="text-rose-400 line-through bg-rose-950/50 px-1 rounded">
-                              {t.word}
-                            </span>
-                          );
-                        }
-                        if (t.type === 'added') {
-                          return (
-                            <span key={i} className="text-emerald-400 font-medium bg-emerald-950/50 px-1 rounded">
-                              {t.word}
-                            </span>
-                          );
-                        }
-                        return <span key={i} className="text-white/80">{t.word}</span>;
-                      })}
-                    </div>
-                  </div>
-                ) : (
-                  <textarea
-                    rows={4}
-                    value={userRewrite}
-                    onChange={(e) => setUserRewrite(e.target.value)}
-                    placeholder="Type your exact rewrite here..."
-                    className="w-full bg-black/60 border border-white/15 rounded-xl p-3.5 text-xs text-white leading-relaxed placeholder-white/30 focus:outline-none focus:border-indigo-500"
-                  />
-                )}
-
-                {/* Action Bar */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-                  <div className="flex items-center gap-2 text-xs text-white/50">
-                    <Database size={13} className="text-indigo-400" />
-                    <span>
-                      {savedRewrites.length} rewrites saved • {publishedStoriesCount} published stories in corpus
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2 self-end sm:self-auto">
-                    {onApplyRewritesToArticle && currentArticle && (
+                  <div className="flex items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/10">
+                    {currentArticle && (
                       <button
-                        type="button"
-                        onClick={handleApplyRewritesToArticle}
-                        className="px-3 py-2 rounded-xl text-xs font-medium bg-white/10 hover:bg-white/15 text-white/80 transition-colors cursor-pointer"
-                        title="Update the active story markdown with your approved rewrites"
+                        onClick={() => setSourceMode('current')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                          sourceMode === 'current'
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-white/60 hover:text-white'
+                        }`}
                       >
-                        Apply to Story
+                        Current Story
                       </button>
                     )}
-
+                    {drafts.length > 0 && (
+                      <button
+                        onClick={() => setSourceMode('drafts')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                          sourceMode === 'drafts'
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-white/60 hover:text-white'
+                        }`}
+                      >
+                        Past Stories ({drafts.length})
+                      </button>
+                    )}
                     <button
-                      type="button"
-                      onClick={handleSaveChunk}
-                      disabled={!userRewrite.trim() || isSubmitting}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all shadow-md shadow-emerald-950/40 cursor-pointer"
+                      onClick={() => setSourceMode('custom')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                        sourceMode === 'custom'
+                          ? 'bg-indigo-600 text-white'
+                          : 'text-white/60 hover:text-white'
+                      }`}
                     >
-                      {isSubmitting ? (
-                        <>
-                          <RefreshCw size={13} className="animate-spin" />
-                          Calibrating...
-                        </>
-                      ) : (
-                        <>
-                          <Check size={14} />
-                          Save &amp; Teach Voice (Next Chunk →)
-                        </>
-                      )}
+                      Custom Notes
                     </button>
                   </div>
                 </div>
 
-                {feedback && (
-                  <div className="text-xs text-emerald-400 font-medium pt-1 flex items-center gap-1.5">
-                    <Check size={13} /> {feedback}
+                <div className="flex items-center gap-2 text-xs text-white/60">
+                  <span>Pacing:</span>
+                  <select
+                    value={chunkSize}
+                    onChange={(e) => setChunkSize(Number(e.target.value))}
+                    className="bg-black/40 border border-white/15 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value={1}>1 sentence at a time</option>
+                    <option value={2}>2 sentences at a time</option>
+                    <option value={3}>3 sentences at a time (Recommended)</option>
+                    <option value={5}>5 sentences at a time</option>
+                  </select>
+                </div>
+              </div>
+
+              {sourceMode === 'custom' && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-white/70">Paste Raw Spoken Notes or Transcript:</label>
+                  <textarea
+                    rows={3}
+                    value={customSpokenText}
+                    onChange={(e) => setCustomSpokenText(e.target.value)}
+                    placeholder="Paste spoken notes here to slice into 3-sentence chunks..."
+                    className="w-full p-3 bg-black/40 border border-white/10 rounded-xl text-xs text-white placeholder-white/20 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              )}
+
+              {spokenChunks.length > 0 ? (
+                <div className="space-y-4">
+                  {/* Stepper Progress Bar */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs text-white/60">
+                      <span className="font-semibold text-indigo-300">
+                        Chunk {currentChunkIndex + 1} of {spokenChunks.length}
+                      </span>
+                      <span className="text-[11px] text-white/40">
+                        {spokenChunks[currentChunkIndex]?.sentences.length} sentences in this chunk
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                      {spokenChunks.map((_, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => handleSelectChunk(idx)}
+                          className={`h-2 flex-1 rounded-full transition-all cursor-pointer ${
+                            idx === currentChunkIndex
+                              ? 'bg-indigo-500 ring-2 ring-indigo-400/40'
+                              : idx < currentChunkIndex
+                              ? 'bg-emerald-500/70'
+                              : 'bg-white/10 hover:bg-white/20'
+                          }`}
+                          title={`Jump to chunk ${idx + 1}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Step 1: What You Said */}
+                  <div className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-indigo-400 flex items-center gap-1.5">
+                        <Mic size={14} /> 1. What You Said (Raw Audio Transcript)
+                      </span>
+                      <span className="text-[10px] uppercase font-mono text-white/30 tracking-wider">Spoken Input</span>
+                    </div>
+                    <p className="text-sm text-white/90 leading-relaxed font-sans bg-white/[0.02] p-3 rounded-xl border border-white/5">
+                      {activeSpoken?.rawSpoken}
+                    </p>
+                  </div>
+
+                  {/* Step 2: How AI Wrote It */}
+                  <div className="p-4 rounded-2xl bg-indigo-950/20 border border-indigo-500/20 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-indigo-300 flex items-center gap-1.5">
+                        <Wand2 size={14} className="text-indigo-400" /> 2. How the AI Drafted It
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setUserRewrite(aiDraft)}
+                        className="text-[11px] text-indigo-300 hover:text-white flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Copy AI draft to your rewrite box below"
+                      >
+                        <Copy size={12} /> Copy to Rewrite
+                      </button>
+                    </div>
+                    <p className="text-sm text-white/80 leading-relaxed font-serif bg-black/30 p-3 rounded-xl border border-white/5">
+                      {aiDraft || <span className="italic text-white/30">No draft available.</span>}
+                    </p>
+                  </div>
+
+                  {/* Step 3: How You Actually Write It */}
+                  <div className="p-4 rounded-2xl bg-emerald-950/15 border border-emerald-500/30 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                        <PenTool size={14} /> 3. How YOU Write It (Keyboard Only)
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-emerald-300/60 hidden sm:inline">No mic allowed — typing captures your exact voice</span>
+                        <button
+                          type="button"
+                          onClick={() => setShowDiff(!showDiff)}
+                          className={`text-xs px-2.5 py-1 rounded-lg border flex items-center gap-1 transition-colors cursor-pointer ${
+                            showDiff
+                              ? 'bg-emerald-600/30 border-emerald-500 text-emerald-200'
+                              : 'bg-white/5 border-white/10 text-white/60 hover:text-white'
+                          }`}
+                        >
+                          <Eye size={12} /> {showDiff ? 'Hide Diff' : 'View Diff'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <textarea
+                      rows={3}
+                      value={userRewrite}
+                      onChange={(e) => setUserRewrite(e.target.value)}
+                      placeholder="Type exactly how you would write these 3 sentences. Fix cadence, strip AI words, use your own vocabulary..."
+                      className="w-full p-3.5 bg-black/60 border border-emerald-500/40 rounded-xl text-sm text-white placeholder-white/20 font-serif leading-relaxed focus:outline-none focus:border-emerald-400"
+                    />
+
+                    {/* Word-by-Word Diff View */}
+                    {showDiff && aiDraft && (
+                      <div className="p-3 bg-black/50 border border-white/10 rounded-xl space-y-1.5 text-xs">
+                        <div className="text-[11px] text-white/40 uppercase tracking-wider font-semibold">
+                          Diff vs AI Draft (<span className="text-rose-400 line-through">AI Removed</span> / <span className="text-emerald-400 font-semibold underline">Your Words</span>)
+                        </div>
+                        <div className="flex flex-wrap gap-1 leading-relaxed">
+                          {computeWordDiff(aiDraft, userRewrite).map((token, i) => {
+                            if (token.type === 'removed') {
+                              return (
+                                <span key={i} className="text-rose-400 line-through bg-rose-500/10 px-1 rounded">
+                                  {token.word}
+                                </span>
+                              );
+                            }
+                            if (token.type === 'added') {
+                              return (
+                                <span key={i} className="text-emerald-300 font-semibold bg-emerald-500/15 px-1 rounded underline">
+                                  {token.word}
+                                </span>
+                              );
+                            }
+                            return <span key={i} className="text-white/70">{token.word}</span>;
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Action Bar */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+                      <div className="flex items-center gap-1.5 text-xs text-white/50">
+                        <Database size={13} className="text-emerald-400" />
+                        Grounded in <strong className="text-white">{totalCorpusCount}</strong> published reference stories
+                      </div>
+
+                      <div className="flex items-center gap-2 self-end sm:self-auto">
+                        {onApplyRewritesToArticle && currentArticle && (
+                          <button
+                            type="button"
+                            onClick={handleApplyRewritesToArticle}
+                            className="px-3 py-2 rounded-xl text-xs font-medium bg-white/10 hover:bg-white/15 text-white/80 transition-colors cursor-pointer"
+                            title="Update the active story markdown with your approved rewrites"
+                          >
+                            Apply to Story
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={handleSaveChunk}
+                          disabled={!userRewrite.trim() || isSubmitting}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all shadow-md shadow-emerald-950/40 cursor-pointer"
+                        >
+                          {isSubmitting ? (
+                            <>
+                              <RefreshCw size={13} className="animate-spin" />
+                              Calibrating...
+                            </>
+                          ) : (
+                            <>
+                              <Check size={14} />
+                              Save &amp; Teach Voice (Next Chunk →)
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {feedback && (
+                      <div className="text-xs text-emerald-400 font-medium pt-1 flex items-center gap-1.5">
+                        <Check size={13} /> {feedback}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="py-12 text-center text-white/40 space-y-2 border border-dashed border-white/10 rounded-2xl">
+                  <FileText size={32} className="mx-auto opacity-30" />
+                  <p className="text-xs font-medium text-white/60">No speech chunks loaded</p>
+                  <p className="text-[11px]">Choose a story above or paste spoken notes to start calibrating your voice.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 2: PUBLISHED WRITING CORPUS */}
+          {activeTab === 'corpus' && (
+            <div className="p-4 sm:p-6 space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <BookOpen size={16} className="text-emerald-400" />
+                    My Published Writing Corpus
+                  </h3>
+                  <p className="text-xs text-white/50 mt-0.5">
+                    Your real-world published writing (articles, blog posts, newsletters) that the AI continuously studies as ground truth.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsAddingArticle(!isAddingArticle)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/40 text-emerald-200 border border-emerald-500/30 text-xs font-semibold transition-colors cursor-pointer self-start sm:self-auto"
+                >
+                  <Plus size={14} /> {isAddingArticle ? 'Cancel' : 'Add Published Article'}
+                </button>
+              </div>
+
+              {/* Add Article Form */}
+              {isAddingArticle && (
+                <form onSubmit={handleAddExternalArticle} className="p-4 rounded-2xl bg-black/40 border border-emerald-500/30 space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="text-xs text-white/60 block mb-1">Article / Post Title:</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Stop Underpricing Your Work"
+                        value={newTitle}
+                        onChange={(e) => setNewTitle(e.target.value)}
+                        className="w-full px-3 py-2 bg-black/60 border border-white/10 rounded-xl text-xs text-white placeholder-white/20 focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-white/60 block mb-1">Category:</label>
+                      <select
+                        value={newCategory}
+                        onChange={(e) => setNewCategory(e.target.value as any)}
+                        className="w-full px-3 py-2 bg-black/60 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                      >
+                        <option value="article">Medium / Blog Article</option>
+                        <option value="post">Social / LinkedIn Post</option>
+                        <option value="newsletter">Email / Newsletter</option>
+                        <option value="other">Other Prose</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-white/60 block mb-1">Published Content:</label>
+                    <textarea
+                      rows={5}
+                      placeholder="Paste your authentic finalized prose here..."
+                      value={newContent}
+                      onChange={(e) => setNewContent(e.target.value)}
+                      className="w-full p-3 bg-black/60 border border-white/10 rounded-xl text-xs text-white placeholder-white/20 font-serif leading-relaxed focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingArticle(false)}
+                      className="px-3 py-1.5 rounded-xl text-xs text-white/50 hover:text-white transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!newTitle.trim() || !newContent.trim()}
+                      className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold disabled:opacity-40 transition-colors cursor-pointer shadow-md"
+                    >
+                      Save to Corpus
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* Corpus List */}
+              <div className="space-y-4">
+                {/* External Published Writings */}
+                {externalCorpus.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold text-white/50 uppercase tracking-wider">
+                      Imported External Articles ({externalCorpus.length})
+                    </div>
+                    <div className="divide-y divide-white/5 rounded-2xl bg-black/30 border border-white/5 overflow-hidden">
+                      {externalCorpus.map((item) => (
+                        <div key={item.id} className="p-3.5 flex items-start justify-between gap-3 text-xs">
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-white truncate">{item.title}</span>
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] text-emerald-300 uppercase">
+                                {item.category || 'article'}
+                              </span>
+                              <span className="text-[10px] text-white/40">{item.wordCount} words</span>
+                            </div>
+                            <p className="text-white/50 line-clamp-2 font-serif text-[11px] leading-relaxed">
+                              {item.content}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteExternalArticle(item.id)}
+                            className="text-white/30 hover:text-rose-400 p-1 rounded transition-colors cursor-pointer flex-shrink-0"
+                            title="Delete from corpus"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
+
+                {/* In-App Published Drafts */}
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-white/50 uppercase tracking-wider">
+                    In-App Finalized &amp; Published Stories ({inAppPublishedCount})
+                  </div>
+                  <div className="divide-y divide-white/5 rounded-2xl bg-black/30 border border-white/5 overflow-hidden">
+                    {inAppPublishedCount === 0 ? (
+                      <div className="p-4 text-xs text-white/30 italic text-center">
+                        No in-app stories marked as published yet. Click "Mark as Published" in the Medium editor to add finished stories here!
+                      </div>
+                    ) : (
+                      drafts
+                        .filter((d) => d.isPublished)
+                        .map((draft) => (
+                          <div key={draft.id} className="p-3.5 flex items-start justify-between gap-3 text-xs">
+                            <div className="space-y-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-white truncate">{draft.title}</span>
+                                <span className="px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-[10px] text-indigo-300">
+                                  In-App Story
+                                </span>
+                                <span className="text-[10px] text-white/40">{draft.wordCount} words</span>
+                              </div>
+                              <p className="text-white/50 line-clamp-1 font-serif text-[11px]">
+                                {draft.subtitle || draft.contentMarkdown.slice(0, 100)}
+                              </p>
+                            </div>
+                          </div>
+                        ))
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
-          ) : (
-            <div className="py-12 text-center text-white/40 space-y-2 border border-dashed border-white/10 rounded-2xl">
-              <FileText size={32} className="mx-auto opacity-30" />
-              <p className="text-xs font-medium text-white/60">No speech chunks loaded</p>
-              <p className="text-[11px]">Choose a story above or paste spoken notes to start calibrating your voice.</p>
+          )}
+
+          {/* TAB 3: SAVED REWRITES */}
+          {activeTab === 'rewrites' && (
+            <div className="p-4 sm:p-6 space-y-4">
+              <div className="flex items-center justify-between border-b border-white/10 pb-4">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <FileText size={16} className="text-amber-400" />
+                    Saved Sentence Rewrite Pairs
+                  </h3>
+                  <p className="text-xs text-white/50 mt-0.5">
+                    Exact ground-truth pairs of raw speech vs your manual keyboard rewrites.
+                  </p>
+                </div>
+                <span className="text-xs text-white/40 font-mono px-2 py-0.5 rounded bg-white/5">
+                  {savedRewrites.length} pairs saved
+                </span>
+              </div>
+
+              {savedRewrites.length === 0 ? (
+                <div className="py-12 text-center text-white/30 text-xs italic">
+                  No sentence rewrites saved yet. Complete 3-sentence chunks in the calibrator to build your library!
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {savedRewrites.map((pair, idx) => (
+                    <div key={pair.id} className="p-4 rounded-2xl bg-black/40 border border-white/10 space-y-2 text-xs">
+                      <div className="flex items-center justify-between text-white/40 pb-1 border-b border-white/5">
+                        <span className="font-semibold text-indigo-300">Rewrite #{savedRewrites.length - idx}</span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[10px]">{new Date(pair.timestamp).toLocaleDateString()}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteRewrite(pair.id)}
+                            className="text-white/30 hover:text-rose-400 transition-colors cursor-pointer"
+                            title="Delete rewrite pair"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        <div className="space-y-1">
+                          <span className="text-[10px] uppercase font-bold text-white/40 tracking-wider">What You Spoke:</span>
+                          <p className="text-white/70 bg-white/[0.02] p-2.5 rounded-lg border border-white/5 leading-relaxed">
+                            {pair.sourceTranscriptChunk}
+                          </p>
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">How You Wrote It:</span>
+                          <p className="text-emerald-200 bg-emerald-500/5 p-2.5 rounded-lg border border-emerald-500/15 leading-relaxed font-serif">
+                            {pair.userRewriteChunk}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

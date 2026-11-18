@@ -93,6 +93,21 @@ export interface GenerationOptions {
   customInstructions: string;
 }
 
+export interface WordReplacement {
+  id: string;
+  from: string; // Target or misheard word/phrase (e.g. "panoptic")
+  to: string;   // Desired replacement (e.g. "Panoptyc")
+}
+
+export interface PublishedWriting {
+  id: string;
+  timestamp: string;
+  title: string;
+  category?: 'article' | 'post' | 'newsletter' | 'dictation' | 'other';
+  content: string;
+  wordCount: number;
+}
+
 export interface VoiceInterviewAnswer {
   question: string;
   answer: string;
@@ -136,4 +151,7 @@ export interface VoiceProfile {
   dilemmasAnsweredCount?: number;
   rewritePairsCount?: number;
   recentRewritePairs?: VoiceRewritePair[];
+  customVocabulary?: string[];
+  wordReplacements?: WordReplacement[];
+  externalCorpus?: PublishedWriting[];
 }

@@ -3,6 +3,7 @@ import path from "path";
 import dotenv from "dotenv";
 import { applyResearch, citationSchemaProperties, localResearch, researchArticle, researchInstructions } from "./src/server/articleResearch";
 import { GoogleGenAI, Type } from "@google/genai";
+import { formatWithPersonalDictionary } from "./src/utils/dictionary";
 import {
   generateArticleLocally,
   refineArticleLocally,
@@ -172,7 +173,7 @@ Return only valid JSON matching the schema.`,
 // Audio transcription endpoint with multimodal Gemini fallback
 app.post("/api/transcribe", async (req, res) => {
   try {
-    const { audioData, mimeType } = req.body;
+    const { audioData, mimeType, customVocabulary, wordReplacements } = req.body;
     if (!audioData) {
       return res.status(400).json({ error: "Missing audioData in request." });
     }
@@ -193,7 +194,11 @@ app.post("/api/transcribe", async (req, res) => {
     const rawMime = mimeType || "audio/webm";
     const effectiveMime = rawMime.split(";")[0].trim().toLowerCase() || "audio/webm";
 
-    const promptText = "Please accurately transcribe this audio recording of someone brainstorming their ideas, thoughts, and concepts. Preserve all key thoughts, terminology, and natural phrasing without unnecessary pleasantries or hallucinations.";
+    const vocabHint = Array.isArray(customVocabulary) && customVocabulary.length > 0
+      ? ` Pay special attention to domain terminology, brand names, and proper nouns: ${customVocabulary.slice(0, 30).join(", ")}.`
+      : "";
+
+    const promptText = `Please accurately transcribe this audio recording of someone brainstorming their ideas, thoughts, and concepts. Preserve all key thoughts, terminology, and natural phrasing without unnecessary pleasantries or hallucinations.${vocabHint}`;
 
     const contents = [
       {
@@ -237,7 +242,8 @@ app.post("/api/transcribe", async (req, res) => {
       throw lastError;
     }
 
-    res.json({ transcript: transcript.trim() });
+    const formattedTranscript = formatWithPersonalDictionary(transcript.trim(), wordReplacements, customVocabulary);
+    res.json({ transcript: formattedTranscript });
   } catch (error: any) {
     console.error("Transcription error:", error);
     res.status(500).json({
@@ -351,6 +357,12 @@ How the author actually wrote it: "${p.userRewriteChunk}"
 `).join('\n')
       : "";
 
+    const vocabList: string[] = Array.isArray(voiceProfile?.customVocabulary) ? voiceProfile.customVocabulary : [];
+    const replacementsList = Array.isArray(voiceProfile?.wordReplacements) ? voiceProfile.wordReplacements : [];
+    const domainVocabPrompt = vocabList.length > 0
+      ? `\nDOMAIN TERMINOLOGY & PROPER NOUNS (Preserve exact spelling and casing):\n${vocabList.join(", ")}`
+      : "";
+
     // Research is automatic: spoken facts and broad topics both benefit from sources.
     const research = await researchArticle(ai, TEXT_MODEL, transcript.trim());
 
@@ -366,6 +378,7 @@ STYLE & CONFIGURATION:
 - Target Audience: ${safeAudience}
 - Target Length: ${lengthGuides[safeLength]}
 ${safeInstructions ? `- Custom Creator Instructions: ${safeInstructions}` : ""}
+${domainVocabPrompt}
 ${safeVoiceProfile ? `
 AUTHOR VOICE PROFILE (HIGHEST PRIORITY):
 ${safeVoiceProfile}
@@ -539,7 +552,13 @@ Return the result strictly as a valid JSON object matching the requested schema.
     });
 
     const parsed = JSON.parse(response.text || "{}");
-    res.json({ ...applyResearch(parsed, research), generationMode: "ai" });
+    const formatted = {
+      ...parsed,
+      title: formatWithPersonalDictionary(parsed.title || "", replacementsList, vocabList),
+      subtitle: formatWithPersonalDictionary(parsed.subtitle || "", replacementsList, vocabList),
+      contentMarkdown: formatWithPersonalDictionary(parsed.contentMarkdown || "", replacementsList, vocabList),
+    };
+    res.json({ ...applyResearch(formatted, research), generationMode: "ai" });
   } catch (error: any) {
     console.error("Generate article error:", error);
     res.status(500).json({
@@ -991,6 +1010,9 @@ Provide a concise 1-2 sentence adaptationSummary. Return valid JSON matching the
       corpusArticleCount: publishedPairs?.length || currentProfile?.corpusArticleCount || 0,
       rewritePairsCount: rewritePairs.length,
       recentRewritePairs: rewritePairs.slice(0, 20),
+      customVocabulary: currentProfile?.customVocabulary,
+      wordReplacements: currentProfile?.wordReplacements,
+      externalCorpus: currentProfile?.externalCorpus,
     };
 
     res.json({
