@@ -5,6 +5,7 @@ import type {
   MediumArticle,
   VoiceDilemma,
   VoiceProfile,
+  VoiceRewritePair,
 } from '../types';
 import { localResearch } from './articleResearch';
 
@@ -525,6 +526,148 @@ export function adaptVoiceFromCorpusLocally(
 
   return {
     profile: updatedProfile,
+    adaptationSummary: summary,
+  };
+}
+
+/**
+ * Adapt a Voice Profile from explicit sentence-by-sentence rewrites,
+ * where the user was presented with what they said vs what AI wrote,
+ * and typed their exact personal rewrite (keyboard only).
+ * Can be combined with the published corpus.
+ */
+export function adaptVoiceFromRewritesLocally(
+  rewritePairs: VoiceRewritePair[],
+  currentProfile?: VoiceProfile | null,
+  publishedPairs?: CorpusPair[]
+): { profile: VoiceProfile; adaptationSummary: string } {
+  let baseResult: { profile: VoiceProfile; adaptationSummary: string };
+  if (publishedPairs && publishedPairs.length > 0) {
+    baseResult = adaptVoiceFromCorpusLocally(publishedPairs, currentProfile);
+  } else {
+    baseResult = {
+      profile: currentProfile || {
+        name: 'My Voice',
+        summary: 'Authentic personal voice profile.',
+        traits: ['Authentic', 'Clear', 'Human'],
+        sentenceStyle: 'Balanced, conversational cadence.',
+        vocabulary: [],
+        signatureMoves: [],
+        avoidances: [],
+        writingInstructions: 'Write naturally and clearly.',
+        interviewAnswers: [],
+        updatedAt: new Date().toISOString(),
+      },
+      adaptationSummary: 'Calibrated from rewrites.',
+    };
+  }
+
+  if (!rewritePairs || rewritePairs.length === 0) {
+    return baseResult;
+  }
+
+  const profile = baseResult.profile;
+  const traits = new Set<string>(profile.traits || []);
+  const vocabulary = new Set<string>(profile.vocabulary || []);
+  const signatureMoves = new Set<string>(profile.signatureMoves || []);
+  const avoidances = new Set<string>(profile.avoidances || []);
+  const bannedWords = new Set<string>(profile.bannedWordsAndPhrases || []);
+
+  let totalSpokenWords = 0;
+  let totalDraftWords = 0;
+  let totalRewriteWords = 0;
+  let emDashCount = 0;
+  let semicolonCount = 0;
+
+  for (const pair of rewritePairs) {
+    const spoken = (pair.sourceTranscriptChunk || '').toLowerCase();
+    const draft = (pair.aiDraftChunk || '').toLowerCase();
+    const rewrite = pair.userRewriteChunk || '';
+    const rewriteLower = rewrite.toLowerCase();
+
+    const spokenWords = spoken.split(/\s+/).filter(Boolean);
+    const draftWords = draft.split(/\s+/).filter(Boolean);
+    const rewriteWords = rewriteLower.split(/\s+/).filter(Boolean);
+
+    totalSpokenWords += spokenWords.length;
+    totalDraftWords += draftWords.length;
+    totalRewriteWords += rewriteWords.length;
+
+    if (rewrite.includes('—') || rewrite.includes('--')) {
+      emDashCount++;
+    }
+    if (rewrite.includes(';')) {
+      semicolonCount++;
+    }
+
+    const AI_CLICHES = [
+      'delve', 'testament', 'tapestry', 'moreover', 'in conclusion',
+      'synergy', 'leverage', 'crucial', 'foster', 'landscape', 'pivotal'
+    ];
+    for (const c of AI_CLICHES) {
+      if (draft.includes(c) && !rewriteLower.includes(c)) {
+        bannedWords.add(c);
+        avoidances.add(`Deleted AI cliché: "${c}"`);
+      }
+    }
+
+    for (const w of rewriteWords) {
+      const cleanW = w.replace(/[^a-z0-9-]/g, '');
+      if (cleanW.length > 4 && !draft.includes(cleanW) && !spoken.includes(cleanW)) {
+        vocabulary.add(cleanW);
+      }
+    }
+  }
+
+  if (emDashCount >= 2) {
+    signatureMoves.add('Uses em-dashes (—) for sharp parenthetical observations');
+  }
+  if (semicolonCount === 0) {
+    avoidances.add('Avoids formal semicolons; prefers clean sentence breaks');
+  }
+
+  let sentenceStyle = profile.sentenceStyle;
+  if (totalRewriteWords < totalDraftWords * 0.85) {
+    traits.add('Punchy');
+    traits.add('Concise');
+    traits.add('Direct');
+    sentenceStyle = 'Punchy, direct cadence. Cuts run-on sentences down into sharp, declarative points.';
+  } else if (totalRewriteWords > totalDraftWords * 1.15) {
+    traits.add('Detailed');
+    traits.add('Expressive');
+    sentenceStyle = 'Detailed narrative cadence. Adds nuance and authentic depth to brief statements.';
+  }
+
+  const summary = `Calibrated from ${rewritePairs.length} exact sentence-by-sentence rewrites${publishedPairs?.length ? ` and ${publishedPairs.length} published stories` : ''}.`;
+
+  const updatedNotes = [
+    ...(profile.adaptationNotes || []),
+    `${new Date().toLocaleDateString()}: ${summary}`,
+  ].slice(-10);
+
+  const newInstructions = [
+    sentenceStyle ? `- Cadence: ${sentenceStyle}` : '',
+    bannedWords.size > 0 ? `- Strict Avoidances: Never use ${Array.from(bannedWords).slice(0, 10).join(', ')}.` : '',
+    signatureMoves.size > 0 ? `- Signature Moves: ${Array.from(signatureMoves).slice(0, 5).join('; ')}.` : '',
+    profile.writingInstructions ? profile.writingInstructions : '',
+  ].filter(Boolean).join('\n');
+
+  return {
+    profile: {
+      ...profile,
+      summary: profile.summary || summary,
+      traits: Array.from(traits).slice(0, 12),
+      sentenceStyle,
+      vocabulary: Array.from(vocabulary).slice(0, 30),
+      signatureMoves: Array.from(signatureMoves).slice(0, 10),
+      avoidances: Array.from(avoidances).slice(0, 12),
+      bannedWordsAndPhrases: Array.from(bannedWords).slice(0, 20),
+      writingInstructions: newInstructions,
+      updatedAt: new Date().toISOString(),
+      adaptationNotes: updatedNotes,
+      rewritePairsCount: rewritePairs.length,
+      recentRewritePairs: rewritePairs.slice(0, 20),
+    },
     adaptationSummary: summary,
   };
 }

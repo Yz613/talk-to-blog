@@ -21,6 +21,7 @@ import MediumPreview from './components/MediumPreview';
 import SeoDashboard from './components/SeoDashboard';
 import DraftsHistoryModal from './components/DraftsHistoryModal';
 import VoiceProfileModal from './components/VoiceProfileModal';
+import SentenceCalibratorModal from './components/SentenceCalibratorModal';
 
 const STORAGE_KEY = 'voice_to_medium_drafts_v1';
 const MAX_SAVED_DRAFTS = 50;
@@ -74,6 +75,7 @@ export default function App() {
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [storySession, setStorySession] = useState(0);
   const [isVoiceProfileOpen, setIsVoiceProfileOpen] = useState(false);
+  const [isSentenceCalibratorOpen, setIsSentenceCalibratorOpen] = useState(false);
   const syncVoiceDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [apiKey, setApiKey] = useState(() => {
     try {
@@ -672,6 +674,15 @@ export default function App() {
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={() => setIsSentenceCalibratorOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-indigo-500/30 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 transition-colors cursor-pointer"
+              title="Calibrate voice 3 sentences at a time with keyboard rewriting"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="hidden sm:inline">Calibrate Voice</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setIsVoiceProfileOpen(true)}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors cursor-pointer ${voiceProfile ? 'text-emerald-200 bg-emerald-500/10 border-emerald-500/20 hover:bg-emerald-500/15' : 'text-white/80 bg-white/5 border-white/10 hover:bg-white/10'}`}
               title={voiceProfile ? `Voice profile: ${voiceProfile.name}` : 'Connect Gemini and teach it your voice'}
@@ -836,6 +847,7 @@ export default function App() {
               onSyncVoiceFromCorpus={handleSyncVoiceFromCorpus}
               onRevoiceArticle={handleRevoiceArticle}
               onSaveVoiceProfile={handleSaveVoiceProfile}
+              onOpenSentenceCalibrator={() => setIsSentenceCalibratorOpen(true)}
               publishedStoriesCount={drafts.filter((d) => d.isPublished || (d.initialAiDraft && d.title !== d.initialAiDraft.title)).length}
               apiKey={apiKey}
               isRefining={isRefining}
@@ -886,6 +898,17 @@ export default function App() {
         onApiKeyChange={handleApiKeyChange}
         onDisconnectKey={handleDisconnectKey}
         onSaveProfile={handleSaveVoiceProfile}
+      />
+
+      <SentenceCalibratorModal
+        isOpen={isSentenceCalibratorOpen}
+        onClose={() => setIsSentenceCalibratorOpen(false)}
+        currentArticle={currentArticle}
+        drafts={drafts}
+        voiceProfile={voiceProfile}
+        onSaveVoiceProfile={handleSaveVoiceProfile}
+        onApplyRewritesToArticle={(content) => handleUpdateArticle({ contentMarkdown: content })}
+        apiKey={apiKey}
       />
     </div>
   );

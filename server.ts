@@ -8,6 +8,7 @@ import {
   refineArticleLocally,
   adaptVoiceLocally,
   adaptVoiceFromCorpusLocally,
+  adaptVoiceFromRewritesLocally,
   revoiceArticleLocally,
   generateDilemmasLocally,
   submitDilemmaLocally,
@@ -19,6 +20,7 @@ import type {
   MediumArticle,
   VoiceDilemma,
   VoiceProfile,
+  VoiceRewritePair,
 } from "./src/types";
 
 dotenv.config();
@@ -341,6 +343,14 @@ Core Mandates:
         }, null, 2)
       : "";
 
+    const rewritePairsExemplars = Array.isArray(voiceProfile?.recentRewritePairs) && voiceProfile.recentRewritePairs.length > 0
+      ? voiceProfile.recentRewritePairs.slice(0, 5).map((p: VoiceRewritePair, i: number) => `
+[Rewrite Example ${i + 1}]:
+What the author spoke: "${p.sourceTranscriptChunk}"
+How the author actually wrote it: "${p.userRewriteChunk}"
+`).join('\n')
+      : "";
+
     // Research is automatic: spoken facts and broad topics both benefit from sources.
     const research = await researchArticle(ai, TEXT_MODEL, transcript.trim());
 
@@ -361,6 +371,7 @@ AUTHOR VOICE PROFILE (HIGHEST PRIORITY):
 ${safeVoiceProfile}
 
 Strict instruction: Emulate this author's exact cadence, humor, rhetorical moves, and avoidances. Strip any AI-sounding phrases. Write as this specific person speaks and thinks.` : ""}
+${rewritePairsExemplars ? `\nAUTHOR'S REAL-WORLD SENTENCE REWRITES (Observe how the author rewrites spoken speech into their exact written voice):\n${rewritePairsExemplars}` : ""}
 
 ${researchInstructions(research)}
 
@@ -867,6 +878,136 @@ Provide a concise 1-2 sentence adaptationSummary. Return valid JSON matching the
   }
 });
 
+// Learn and adapt voice from explicit 3-sentence rewrites (What I said -> What AI wrote -> What I wrote)
+app.post("/api/adapt-voice-from-rewrites", async (req, res) => {
+  try {
+    const { rewritePairs, currentProfile, publishedPairs } = req.body;
+    if (!Array.isArray(rewritePairs) || rewritePairs.length === 0) {
+      return res.status(400).json({ error: "Please provide an array of sentence rewrite pairs." });
+    }
+
+    if (!getApiKey(req)) {
+      return res.json(adaptVoiceFromRewritesLocally(rewritePairs, currentProfile, publishedPairs));
+    }
+
+    const ai = getGenAI(req);
+
+    const rewritesSummary = rewritePairs.slice(0, 10).map((pair: VoiceRewritePair, idx: number) => `
+--- SENTENCE REWRITE #${idx + 1} ---
+[WHAT THE AUTHOR SPOKE (Raw Audio/Transcript)]:
+"${pair.sourceTranscriptChunk || ""}"
+
+[WHAT THE AI PROPOSED/DRAFTED]:
+"${pair.aiDraftChunk || ""}"
+
+[HOW THE AUTHOR MANUALLY REWROTE IT (Keyboard Only - Ground Truth)]:
+"${pair.userRewriteChunk || ""}"
+`).join("\n");
+
+    const corpusSummary = Array.isArray(publishedPairs) && publishedPairs.length > 0
+      ? `\nALSO LOOKING AT PUBLISHED ARCHIVE (${publishedPairs.length} stories):\n` +
+        publishedPairs.slice(0, 3).map((pair: any, idx: number) => `
+Published Story #${idx + 1} Title: ${pair.published?.title || "Untitled"}
+Published Excerpt: ${String(pair.published?.contentMarkdown || "").slice(0, 500)}...
+`).join("\n")
+      : "";
+
+    const prompt = `You are a master linguistic profiler and writing stylist.
+The author is calibrating their personal voice by reviewing what they said in spoken voice notes, comparing it to what an AI drafted, and manually typing their EXACT rewrite.
+
+Notice how the author transforms speech and AI drafts into their authentic written prose.
+Also study their published writing archive.
+
+${rewritesSummary}
+${corpusSummary}
+
+${currentProfile ? `CURRENT VOICE PROFILE:\n${JSON.stringify(currentProfile, null, 2)}\n` : ""}
+
+YOUR TASK:
+Synthesize an authoritative, nuanced Voice Profile from these exact rewrites and published stories:
+1. Cut-List / Anti-Patterns: What AI words, clichés, and corporate filler did the author eliminate?
+2. True Cadence & Sentence Rhythm: How does the author structure sentences? (Notice sentence lengths, em-dashes, contractions, punchy fragments vs flowing explanations).
+3. Tone, Attitude & Voice: Is the author direct, pragmatic, dry, witty, humble, candid?
+4. Signature Vocabulary & Habits: What specific words or phrasing patterns did they write?
+5. Directives for Future Writing: Clear rules to ensure all future drafts match this human author's true voice.
+
+Provide a concise 1-2 sentence adaptationSummary. Return valid JSON matching the schema.`;
+
+    const response = await ai.models.generateContent({
+      model: TEXT_MODEL,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            profile: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                summary: { type: Type.STRING },
+                traits: { type: Type.ARRAY, items: { type: Type.STRING } },
+                sentenceStyle: { type: Type.STRING },
+                vocabulary: { type: Type.ARRAY, items: { type: Type.STRING } },
+                signatureMoves: { type: Type.ARRAY, items: { type: Type.STRING } },
+                avoidances: { type: Type.ARRAY, items: { type: Type.STRING } },
+                bannedWordsAndPhrases: { type: Type.ARRAY, items: { type: Type.STRING } },
+                writingInstructions: { type: Type.STRING },
+              },
+              required: [
+                "name", "summary", "traits", "sentenceStyle", "vocabulary",
+                "signatureMoves", "avoidances", "writingInstructions",
+              ],
+            },
+            adaptationSummary: { type: Type.STRING },
+          },
+          required: ["profile", "adaptationSummary"],
+        },
+      },
+    });
+
+    const parsed = JSON.parse(response.text || "{}");
+    const adaptationSummary = parsed.adaptationSummary || `Calibrated voice across ${rewritePairs.length} sentence rewrites.`;
+    const profile = parsed.profile || {};
+
+    const adaptationNotes = [
+      ...(currentProfile?.adaptationNotes || []),
+      `${new Date().toLocaleDateString()}: ${adaptationSummary}`,
+    ].slice(-10);
+
+    const fullProfile: VoiceProfile = {
+      name: profile.name || currentProfile?.name || "My Calibrated Voice",
+      summary: profile.summary || currentProfile?.summary || `Voice calibrated from ${rewritePairs.length} sentence rewrites.`,
+      traits: Array.isArray(profile.traits) ? profile.traits : (currentProfile?.traits || []),
+      sentenceStyle: profile.sentenceStyle || currentProfile?.sentenceStyle || "",
+      vocabulary: Array.isArray(profile.vocabulary) ? profile.vocabulary : (currentProfile?.vocabulary || []),
+      signatureMoves: Array.isArray(profile.signatureMoves) ? profile.signatureMoves : (currentProfile?.signatureMoves || []),
+      avoidances: Array.isArray(profile.avoidances) ? profile.avoidances : (currentProfile?.avoidances || []),
+      bannedWordsAndPhrases: Array.isArray(profile.bannedWordsAndPhrases) ? profile.bannedWordsAndPhrases : (currentProfile?.bannedWordsAndPhrases || []),
+      writingInstructions: profile.writingInstructions || currentProfile?.writingInstructions || "",
+      interviewAnswers: currentProfile?.interviewAnswers || [],
+      updatedAt: new Date().toISOString(),
+      adaptationNotes,
+      corpusArticleCount: publishedPairs?.length || currentProfile?.corpusArticleCount || 0,
+      rewritePairsCount: rewritePairs.length,
+      recentRewritePairs: rewritePairs.slice(0, 20),
+    };
+
+    res.json({
+      profile: fullProfile,
+      adaptationSummary,
+    });
+  } catch (error: any) {
+    console.error("Rewrite voice adaptation error:", error);
+    try {
+      const fallback = adaptVoiceFromRewritesLocally(req.body.rewritePairs, req.body.currentProfile, req.body.publishedPairs);
+      return res.json(fallback);
+    } catch {
+      res.status(500).json({ error: error?.message || "Failed to adapt voice from rewrites." });
+    }
+  }
+});
+
 // Re-voice and de-slop the current article draft using the calibrated voice profile
 app.post("/api/revoice-article", async (req, res) => {
   try {
@@ -893,6 +1034,8 @@ ${article.contentMarkdown}
 
 ${voiceProfile ? `AUTHOR'S CALIBRATED VOICE PROFILE (MANDATORY TO FOLLOW):
 ${JSON.stringify(voiceProfile, null, 2)}` : ""}
+
+${Array.isArray(voiceProfile?.recentRewritePairs) && voiceProfile.recentRewritePairs.length > 0 ? `\nAUTHOR'S REAL-WORLD SENTENCE REWRITES (Study how the author converts speech into their exact written voice):\n${voiceProfile.recentRewritePairs.slice(0, 5).map((p: any, i: number) => `[Example ${i + 1}]:\nSpoken: "${p.sourceTranscriptChunk}"\nAuthor wrote: "${p.userRewriteChunk}"`).join('\n')}` : ""}
 
 ${customInstructions ? `AUTHOR'S SPECIFIC INSTRUCTIONS:\n${customInstructions}` : ""}
 

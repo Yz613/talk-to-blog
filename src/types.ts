@@ -98,6 +98,17 @@ export interface VoiceInterviewAnswer {
   answer: string;
 }
 
+export interface VoiceRewritePair {
+  id: string;
+  timestamp: string;
+  sourceTranscriptChunk: string; // What was spoken
+  aiDraftChunk: string;          // How AI drafted it
+  userRewriteChunk: string;      // How the author wrote it
+  articleId?: string;
+  chunkIndex?: number;
+  totalChunks?: number;
+}
+
 export interface VoiceDilemma {
   id: string;
   category: 'opening' | 'transition' | 'humor' | 'opinion' | 'cadence' | 'conclusion' | 'clarity';
@@ -123,4 +134,6 @@ export interface VoiceProfile {
   adaptationNotes?: string[];
   corpusArticleCount?: number;
   dilemmasAnsweredCount?: number;
+  rewritePairsCount?: number;
+  recentRewritePairs?: VoiceRewritePair[];
 }

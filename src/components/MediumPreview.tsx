@@ -28,6 +28,7 @@ import {
   LoaderCircle,
   HelpCircle,
   Database,
+  PenTool,
 } from 'lucide-react';
 import { MediumArticle, TagItem, VoiceProfile, VoiceDilemma } from '../types';
 import { BUILTIN_VOICE_DILEMMAS } from '../server/localArticle';
@@ -49,6 +50,7 @@ interface MediumPreviewProps {
   onSyncVoiceFromCorpus?: () => Promise<void>;
   onRevoiceArticle?: (instructions?: string) => Promise<void>;
   onSaveVoiceProfile?: (profile: VoiceProfile) => void;
+  onOpenSentenceCalibrator?: () => void;
   publishedStoriesCount?: number;
   apiKey?: string;
   isRefining: boolean;
@@ -66,6 +68,7 @@ export default function MediumPreview({
   onSyncVoiceFromCorpus,
   onRevoiceArticle,
   onSaveVoiceProfile,
+  onOpenSentenceCalibrator,
   publishedStoriesCount = 0,
   apiKey,
   isRefining,
@@ -845,26 +848,39 @@ ${article.contentMarkdown}
               </p>
             </div>
           </div>
-          {onSyncVoiceFromCorpus && (
-            <button
-              type="button"
-              onClick={onSyncVoiceFromCorpus}
-              disabled={isSyncingVoice}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white text-black hover:bg-gray-200 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50 flex-shrink-0"
-            >
-              {isSyncingVoice ? (
-                <>
-                  <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
-                  Calibrating Corpus...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                  Calibrate from Published Stories
-                </>
-              )}
-            </button>
-          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            {onOpenSentenceCalibrator && (
+              <button
+                type="button"
+                onClick={onOpenSentenceCalibrator}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-indigo-600/30 hover:bg-indigo-600/40 text-indigo-200 border border-indigo-500/40 text-xs font-semibold transition-all cursor-pointer flex-shrink-0"
+                title="Calibrate voice 3 sentences at a time: compare what you said to AI draft, and rewrite with your keyboard"
+              >
+                <PenTool className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Calibrate Voice (3 Sentences)</span>
+              </button>
+            )}
+            {onSyncVoiceFromCorpus && (
+              <button
+                type="button"
+                onClick={onSyncVoiceFromCorpus}
+                disabled={isSyncingVoice}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white text-black hover:bg-gray-200 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50 flex-shrink-0"
+              >
+                {isSyncingVoice ? (
+                  <>
+                    <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                    Calibrating Corpus...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                    Calibrate from Published Stories
+                  </>
+                )}
+              </button>
+            )}
+          </div>
         </div>
       ) : null}
 
